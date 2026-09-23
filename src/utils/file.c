@@ -13,7 +13,8 @@ char *read_file(char *filename) {
         return NULL;
     }
     
-    char *source = malloc(1000);
+    size_t capacity = 4096;
+    char *source = malloc(capacity);
 
     if (source == NULL) {
         printf("Could not allocate memory.\n");
@@ -21,10 +22,21 @@ char *read_file(char *filename) {
         return NULL;
     }
 
-    int index = 0;
+    size_t index = 0;
     int character;
 
     while ((character = fgetc(file)) != EOF) {
+        if (index + 1 >= capacity) {
+            capacity *= 2;
+            char *expanded = realloc(source, capacity);
+            if (expanded == NULL) {
+                printf("Could not allocate memory.\n");
+                free(source);
+                fclose(file);
+                return NULL;
+            }
+            source = expanded;
+        }
         source[index] = character;
         index++;
     }
