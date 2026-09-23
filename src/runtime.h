@@ -2,6 +2,7 @@
 #define MELLOW_RUNTIME_H
 
 #include "lexer.h"
+#include "runtime/value.h"
 
 int runtime_run(TokenList *tokens);
 

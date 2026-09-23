@@ -42,6 +42,9 @@ representation and indexing semantics.
 
 ## Builtins
 
+Readable comparison aliases are also supported: `equal`, `not_equal`, `less`,
+`greater`, `less_equal`, and `greater_equal`.
+
 `print` writes values. `add`, `sub`, `mul`, `div`, `mod`, `pow`, `sqrt`, `inc`,
 and `dec` operate on numbers; `add` also concatenates strings and same-kind
 collections. `eq`, `neq`, `lt`, `gt`, `lte`, and `gte` return booleans.

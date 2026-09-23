@@ -1,7 +1,7 @@
 CC ?= cc
 CFLAGS ?= -std=c11 -Wall -Wextra -pedantic -O2
 
-SOURCES = src/mellow.c src/lexer.c src/runtime.c src/utils/file.c
+SOURCES = src/mellow.c src/lexer.c src/runtime.c src/runtime/value.c src/utils/file.c
 
 .PHONY: all clean test tokens
 

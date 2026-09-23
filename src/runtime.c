@@ -1,17 +1,11 @@
 #include "runtime.h"
+#include "runtime/model.h"
 
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef enum { VALUE_NULL, VALUE_NUMBER, VALUE_STRING, VALUE_BOOL, VALUE_ARRAY, VALUE_LIST } ValueType;
-typedef struct Value Value;
-typedef struct { Value *items; size_t count; size_t capacity; } Collection;
-struct Value { ValueType type; double number; int boolean; char *string; Collection *collection; };
-typedef struct Variable { char *name; Value value; int constant; struct Variable *next; } Variable;
-typedef struct Function { char *name; char **parameters; size_t parameter_count; size_t body_start; size_t body_end; struct Function *next; } Function;
-typedef struct { TokenList *tokens; size_t current; Variable *variables; Function *functions; int failed; int break_signal; int continue_signal; int return_signal; Value return_value; } Runtime;
 static Variable *find_variable(Runtime *runtime, const char *name);
 
 static char *duplicate_text(const char *text) {
@@ -19,13 +13,6 @@ static char *duplicate_text(const char *text) {
     char *copy = malloc(length);
     if (copy) memcpy(copy, text, length);
     return copy;
-}
-static Value null_value(void) { return (Value){VALUE_NULL, 0, 0, NULL, NULL}; }
-static Value number_value(double number) { return (Value){VALUE_NUMBER, number, 0, NULL, NULL}; }
-static Value bool_value(int boolean) { return (Value){VALUE_BOOL, 0, boolean, NULL, NULL}; }
-static Value string_value(const char *text) {
-    Value value = {VALUE_STRING, 0, 0, duplicate_text(text ? text : ""), NULL};
-    return value;
 }
 static Value interpolated_string(Runtime *runtime, const char *text) {
     char buffer[4096]; size_t used = 0;
@@ -56,30 +43,6 @@ static Value interpolated_string(Runtime *runtime, const char *text) {
     }
     buffer[used] = '\0'; return string_value(buffer);
 }
-static Value collection_value(ValueType type) {
-    Value value = {type, 0, 0, NULL, calloc(1, sizeof(Collection))};
-    return value;
-}
-static void free_value(Value *value) {
-    if (value->type == VALUE_STRING) free(value->string);
-    if ((value->type == VALUE_ARRAY || value->type == VALUE_LIST) && value->collection) {
-        for (size_t i = 0; i < value->collection->count; i++) free_value(&value->collection->items[i]);
-        free(value->collection->items); free(value->collection);
-    }
-    value->string = NULL; value->collection = NULL;
-}
-static Value copy_value(Value value) {
-    if (value.type == VALUE_STRING) return string_value(value.string);
-    if (value.type != VALUE_ARRAY && value.type != VALUE_LIST) return value;
-    Value copy = collection_value(value.type);
-    for (size_t i = 0; i < value.collection->count; i++) {
-        Collection *collection = copy.collection;
-        collection->items = realloc(collection->items, (collection->count + 1) * sizeof(Value));
-        collection->items[collection->count++] = copy_value(value.collection->items[i]);
-    }
-    return copy;
-}
-
 static Token *peek(Runtime *runtime) { return &runtime->tokens->items[runtime->current]; }
 static Token *advance(Runtime *runtime) { return &runtime->tokens->items[runtime->current++]; }
 static int match(Runtime *runtime, TokenType type) { if (peek(runtime)->type != type) return 0; advance(runtime); return 1; }
@@ -119,41 +82,9 @@ static Value call_user_function(Runtime *runtime, Function *function, Value *arg
 static int is_number_pair(Value *arguments, size_t count) {
     return count == 2 && arguments[0].type == VALUE_NUMBER && arguments[1].type == VALUE_NUMBER;
 }
-static int value_equal(Value left, Value right) {
-    if (left.type != right.type) return 0;
-    if (left.type == VALUE_NUMBER) return left.number == right.number;
-    if (left.type == VALUE_STRING) return strcmp(left.string, right.string) == 0;
-    if (left.type == VALUE_BOOL) return left.boolean == right.boolean;
-    if (left.type == VALUE_NULL) return 1;
-    if (left.collection->count != right.collection->count) return 0;
-    for (size_t i = 0; i < left.collection->count; i++)
-        if (!value_equal(left.collection->items[i], right.collection->items[i])) return 0;
-    return 1;
+static int named_as(const char *name, const char *short_name, const char *long_name) {
+    return strcmp(name, short_name) == 0 || strcmp(name, long_name) == 0;
 }
-static const char *value_type_name(Value value) {
-    static const char *names[] = {"null", "number", "string", "bool", "array", "list"};
-    return names[value.type];
-}
-static void print_value(Value value) {
-    if (value.type == VALUE_STRING) printf("%s", value.string);
-    else if (value.type == VALUE_NUMBER) printf("%g", value.number);
-    else if (value.type == VALUE_BOOL) printf("%s", value.boolean ? "true" : "false");
-    else if (value.type == VALUE_NULL) printf("null");
-    else {
-        putchar('{');
-        for (size_t i = 0; i < value.collection->count; i++) { if (i) printf(", "); print_value(value.collection->items[i]); }
-        putchar('}');
-    }
-}
-static void collection_append(Value value, Value item) {
-    if (value.collection->count == value.collection->capacity) {
-        size_t capacity = value.collection->capacity == 0 ? 4 : value.collection->capacity * 2;
-        value.collection->items = realloc(value.collection->items, capacity * sizeof(Value));
-        value.collection->capacity = capacity;
-    }
-    value.collection->items[value.collection->count++] = copy_value(item);
-}
-
 static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, size_t count) {
     if (strcmp(name, "print") == 0 || strcmp(name, "Print") == 0) {
         for (size_t i = 0; i < count; i++) {
@@ -189,12 +120,12 @@ static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, 
     }
     if (strcmp(name, "sqrt") == 0 && count == 1 && arguments[0].type == VALUE_NUMBER) return number_value(sqrt(arguments[0].number));
     if ((strcmp(name, "inc") == 0 || strcmp(name, "dec") == 0) && count == 1 && arguments[0].type == VALUE_NUMBER) return number_value(arguments[0].number + (strcmp(name, "inc") == 0 ? 1 : -1));
-    if (strcmp(name, "eq") == 0 && count == 2) return bool_value(value_equal(arguments[0], arguments[1]));
-    if (strcmp(name, "neq") == 0 && count == 2) return bool_value(!value_equal(arguments[0], arguments[1]));
-    if (is_number_pair(arguments, count) && (strcmp(name, "lt") == 0 || strcmp(name, "gt") == 0 || strcmp(name, "lte") == 0 || strcmp(name, "gte") == 0)) {
-        if (strcmp(name, "lt") == 0) return bool_value(arguments[0].number < arguments[1].number);
-        if (strcmp(name, "gt") == 0) return bool_value(arguments[0].number > arguments[1].number);
-        if (strcmp(name, "lte") == 0) return bool_value(arguments[0].number <= arguments[1].number);
+    if (named_as(name, "eq", "equal") && count == 2) return bool_value(value_equal(arguments[0], arguments[1]));
+    if (named_as(name, "neq", "not_equal") && count == 2) return bool_value(!value_equal(arguments[0], arguments[1]));
+    if (is_number_pair(arguments, count) && (named_as(name, "lt", "less") || named_as(name, "gt", "greater") || named_as(name, "lte", "less_equal") || named_as(name, "gte", "greater_equal"))) {
+        if (named_as(name, "lt", "less")) return bool_value(arguments[0].number < arguments[1].number);
+        if (named_as(name, "gt", "greater")) return bool_value(arguments[0].number > arguments[1].number);
+        if (named_as(name, "lte", "less_equal")) return bool_value(arguments[0].number <= arguments[1].number);
         return bool_value(arguments[0].number >= arguments[1].number);
     }
     if (strcmp(name, "and") == 0 && count == 2) return bool_value(arguments[0].boolean && arguments[1].boolean);

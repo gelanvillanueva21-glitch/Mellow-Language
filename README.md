@@ -52,6 +52,27 @@ The current execution pipeline is:
 source -> lexer -> direct evaluator -> runtime values
 ```
 
+## Source layout
+
+```text
+src/
+	lexer.c, lexer.h       tokenization and source locations
+	mellow.c               command-line entry point and REPL
+	runtime.c              statement execution and expression dispatch
+	runtime/
+		value.c, value.h     value ownership, collections, equality, display
+		model.h              runtime state, variables, and function metadata
+	utils/
+		file.c, file.h       source file loading
+```
+
+The next recommended architecture step is to add `environment.c/.h` for nested
+lexical scopes, then `object.c/.h` for classes, instances, fields, and method
+lookup. OOP should be implemented in this order: class declarations, instance
+construction with `init`, `this` field access, method calls, inheritance and
+`super`, then visibility and `free`. That order keeps constructors and dynamic
+dispatch testable without mixing them into memory management prematurely.
+
 See [SPEC.md](SPEC.md) for the grammar and semantics. The next architectural
 step is replacing the direct evaluator with an explicit AST and scoped object
 model for dictionaries, indexing, closures, classes, modules, and structured
