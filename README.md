@@ -83,6 +83,13 @@ let amount = to_number<raw>
 print<add<amount, 10>>
 ```
 
+Text expressions can be evaluated with normal MDAS precedence:
+
+```mellow
+let expression = input<"Expression: ">
+print<evaluate<expression>>
+```
+
 Collections support dictionaries, lookup, mutation, ranges, and iteration:
 
 ```mellow
@@ -91,6 +98,18 @@ put<scores, "Ada", 95>
 for score in range<1, 4> [
 	print<score>
 ]
+```
+
+Errors and string manipulation are also available:
+
+```mellow
+try [
+	raise<"invalid input">
+] catch<error> [
+	print<"Handled: ", error>
+]
+
+print<replace<trim<"  mellow  ">, "mellow", "Mellow">>
 ```
 Only selected functions and classes are imported; module variables and top-level
 executable statements are ignored. The imported declarations execute in the

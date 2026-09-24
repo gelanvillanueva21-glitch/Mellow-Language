@@ -54,6 +54,8 @@ typedef struct {
     char **import_names;
     size_t import_name_count;
     int failed;
+    char *error_message;
+    int exception_raised;
     int break_signal;
     int continue_signal;
     int return_signal;

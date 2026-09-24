@@ -96,6 +96,11 @@ arrays and lists.
 numeric text, `to_int` truncates it, and `to_bool` accepts `true`, `false`, `1`,
 or `0`.
 
+`evaluate<text>` parses a text expression containing numeric values and the
+words `add`, `sub`, `mul`, and `div`. It applies normal MDAS precedence, so
+`1 mul 3 add 7 div 2 sub 8 add 8` evaluates multiplication and division before
+addition and subtraction. `calculate_expression` is an alias.
+
 ## Examples
 
 ```mellow
@@ -109,6 +114,28 @@ func factorial<n> [
 ]
 
 print<factorial<5>>
+```
+
+## Errors and strings
+
+Errors can be recovered with `try` and `catch`. The catch variable receives the
+error message:
+
+```mellow
+try [
+    raise<"invalid value">
+] catch<error> [
+    print<"Handled: ", error>
+]
+```
+
+String helpers include `trim`, `upper`, `lower`, `replace`, `starts_with`,
+`ends_with`, `split`, and `join`:
+
+```mellow
+let phrase = "  mellow language  "
+let words = split<trim<phrase>, " ">
+print<join<words, "-">>
 ```
 
 ## Object-oriented programming

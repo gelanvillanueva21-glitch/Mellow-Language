@@ -1,16 +1,23 @@
-let user = {"name": "Gelan", "age": 25}
-put<user, "role", "developer">
-
-print<get<user, "name">>
-print<get<user, "role">>
-print<has<user, "age">>
-print<len<user>>
-print<inside<"name", user>>
-
-let total = 0
-for number in range<1, 5> [
-	set<total, add<total, number>>
+func mdas<> [
+	// 1 mul 3 add 7 div 2 sub 8 add 8
+	// Multiplication and division are grouped first.
+	let multiplied = mul<1, 3>
+	let divided = div<7, 2>
+	let additions = add<multiplied, divided>
+	let without_eight = sub<additions, 8>
+	return add<without_eight, 8>
 ]
 
-print<"range total: ", total>
-print<"has 3: ", inside<3, range<1, 5>>>
+print<"Mellow MDAS expression result:">
+print<mdas<>>
+
+try [
+	raise<"example error">
+] catch<error> [
+	print<"Handled: ", error>
+]
+
+let phrase = "  mellow language  "
+print<upper<trim<phrase>>>
+print<replace<trim<phrase>, "language", "runtime">>
+print<join<split<trim<phrase>, " ">, "-">>

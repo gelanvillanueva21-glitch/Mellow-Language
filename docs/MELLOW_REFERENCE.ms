@@ -274,6 +274,23 @@ Convert numeric text. .B to_int truncates the numeric value.
 .B to_bool<value>
 Converts booleans, nonzero numbers, or the strings true, false, 1, and 0.
 .TP
+.B trim<text>, upper<text>, lower<text>
+Remove surrounding whitespace or change string case.
+.TP
+.B replace<text, old, new>
+Replace every occurrence of old with new.
+.TP
+starts_with<text, prefix>, ends_with<text, suffix>
+Return a boolean for prefix and suffix checks.
+.TP
+split<text, delimiter>, join<list, delimiter>
+Split a string into a list or join a string collection into one string.
+.NH 1
+9. Errors
+.PP
+try [ ... ] catch<error> [ ... ] catches runtime errors and binds the error
+message to the catch variable. .B raise<message> creates a runtime error.
+.TP
 .B input<> or input<"prompt">
 Reads one terminal line as a string. An optional string prompt is printed before
 reading.

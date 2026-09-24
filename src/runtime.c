@@ -2,6 +2,7 @@
 #include "runtime/model.h"
 #include "utils/file.h"
 
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,6 +52,13 @@ static int match(Runtime *runtime, TokenType type) { if (peek(runtime)->type != 
 static void error_at(Runtime *runtime, const char *message) {
     Token *token = peek(runtime);
     fprintf(stderr, "Mellow error at %d:%d: %s\n", token->line, token->column, message);
+    free(runtime->error_message);
+    runtime->error_message = duplicate_text(message);
+    runtime->failed = 1;
+}
+static void error_message(Runtime *runtime, const char *message) {
+    free(runtime->error_message);
+    runtime->error_message = duplicate_text(message);
     runtime->failed = 1;
 }
 static Variable *find_variable(Runtime *runtime, const char *name) {
@@ -172,6 +180,75 @@ static int is_number_pair(Value *arguments, size_t count) {
 static int named_as(const char *name, const char *short_name, const char *long_name) {
     return strcmp(name, short_name) == 0 || strcmp(name, long_name) == 0;
 }
+static char *text_range(const char *start, size_t length) {
+    char *text = malloc(length + 1);
+    if (!text) return NULL;
+    memcpy(text, start, length); text[length] = '\0';
+    return text;
+}
+static Value string_trim(const char *text) {
+    const char *start = text;
+    while (*start && isspace((unsigned char)*start)) start++;
+    const char *end = text + strlen(text);
+    while (end > start && isspace((unsigned char)end[-1])) end--;
+    char *trimmed = text_range(start, (size_t)(end - start));
+    Value result = string_value(trimmed ? trimmed : ""); free(trimmed); return result;
+}
+static Value string_case(const char *text, int uppercase) {
+    char *result = duplicate_text(text);
+    if (!result) return string_value("");
+    for (char *current = result; *current; current++)
+        *current = (char)(uppercase ? toupper((unsigned char)*current) : tolower((unsigned char)*current));
+    Value value = string_value(result); free(result); return value;
+}
+static Value string_replace(const char *text, const char *old_text, const char *new_text) {
+    if (old_text[0] == '\0') return string_value(text);
+    size_t old_length = strlen(old_text), new_length = strlen(new_text), occurrences = 0;
+    const char *scan = text;
+    while ((scan = strstr(scan, old_text)) != NULL) { occurrences++; scan += old_length; }
+    size_t text_length = strlen(text);
+    size_t result_length = text_length + occurrences * (new_length - old_length);
+    char *result = malloc(result_length + 1);
+    if (!result) return string_value("");
+    const char *source = text; char *destination = result;
+    while ((scan = strstr(source, old_text)) != NULL) {
+        size_t prefix = (size_t)(scan - source);
+        memcpy(destination, source, prefix); destination += prefix;
+        memcpy(destination, new_text, new_length); destination += new_length;
+        source = scan + old_length;
+    }
+    strcpy(destination, source);
+    Value value = string_value(result); free(result); return value;
+}
+static Value string_split(const char *text, const char *delimiter) {
+    Value result = collection_value(VALUE_LIST);
+    size_t delimiter_length = strlen(delimiter);
+    if (delimiter_length == 0) { Value item = string_value(text); collection_append(result, item); free_value(&item); return result; }
+    const char *start = text; const char *match_position;
+    while ((match_position = strstr(start, delimiter)) != NULL) {
+        char *part = text_range(start, (size_t)(match_position - start));
+        Value item = string_value(part ? part : "");
+        free(part); collection_append(result, item); free_value(&item);
+        start = match_position + delimiter_length;
+    }
+    Value item = string_value(start); collection_append(result, item); free_value(&item);
+    return result;
+}
+static Value string_join(Value list, const char *delimiter) {
+    size_t delimiter_length = strlen(delimiter), length = 1;
+    for (size_t i = 0; i < list.collection->count; i++) {
+        if (list.collection->items[i].type != VALUE_STRING) return null_value();
+        length += strlen(list.collection->items[i].string);
+        if (i) length += delimiter_length;
+    }
+    char *result = calloc(length, 1);
+    if (!result) return string_value("");
+    for (size_t i = 0; i < list.collection->count; i++) {
+        if (i) strcat(result, delimiter);
+        strcat(result, list.collection->items[i].string);
+    }
+    Value value = string_value(result); free(result); return value;
+}
 static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, size_t count) {
     if (strcmp(name, "input") == 0 && (count == 0 || (count == 1 && arguments[0].type == VALUE_STRING))) {
         if (count == 1) { fputs(arguments[0].string, stdout); fflush(stdout); }
@@ -179,6 +256,31 @@ static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, 
         if (!fgets(buffer, sizeof(buffer), stdin)) return string_value("");
         buffer[strcspn(buffer, "\r\n")] = '\0';
         return string_value(buffer);
+    }
+    if ((strcmp(name, "trim") == 0 || strcmp(name, "upper") == 0 || strcmp(name, "lower") == 0) && count == 1) {
+        if (arguments[0].type != VALUE_STRING) { error_at(runtime, "string function expects a string"); return null_value(); }
+        if (strcmp(name, "trim") == 0) return string_trim(arguments[0].string);
+        return string_case(arguments[0].string, strcmp(name, "upper") == 0);
+    }
+    if (strcmp(name, "replace") == 0 && count == 3) {
+        if (arguments[0].type != VALUE_STRING || arguments[1].type != VALUE_STRING || arguments[2].type != VALUE_STRING) { error_at(runtime, "replace expects three strings"); return null_value(); }
+        return string_replace(arguments[0].string, arguments[1].string, arguments[2].string);
+    }
+    if ((strcmp(name, "starts_with") == 0 || strcmp(name, "ends_with") == 0) && count == 2) {
+        if (arguments[0].type != VALUE_STRING || arguments[1].type != VALUE_STRING) { error_at(runtime, "string predicate expects two strings"); return null_value(); }
+        if (strcmp(name, "starts_with") == 0) return bool_value(strncmp(arguments[0].string, arguments[1].string, strlen(arguments[1].string)) == 0);
+        size_t text_length = strlen(arguments[0].string), suffix_length = strlen(arguments[1].string);
+        return bool_value(suffix_length <= text_length && strcmp(arguments[0].string + text_length - suffix_length, arguments[1].string) == 0);
+    }
+    if (strcmp(name, "split") == 0 && count == 2) {
+        if (arguments[0].type != VALUE_STRING || arguments[1].type != VALUE_STRING) { error_at(runtime, "split expects two strings"); return null_value(); }
+        return string_split(arguments[0].string, arguments[1].string);
+    }
+    if (strcmp(name, "join") == 0 && count == 2) {
+        if ((arguments[0].type != VALUE_LIST && arguments[0].type != VALUE_ARRAY) || arguments[1].type != VALUE_STRING) { error_at(runtime, "join expects a collection and a string delimiter"); return null_value(); }
+        Value result = string_join(arguments[0], arguments[1].string);
+        if (result.type == VALUE_NULL) { error_at(runtime, "join expects a collection of strings"); return null_value(); }
+        return result;
     }
     if (strcmp(name, "print") == 0 || strcmp(name, "Print") == 0) {
         for (size_t i = 0; i < count; i++) {
@@ -188,8 +290,10 @@ static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, 
         putchar('\n'); return null_value();
     }
     if (strcmp(name, "raise") == 0 && count == 1) { 
-        fprintf(stderr, "Mellow exception: "); print_value(arguments[0]); fputc('\n', stderr);
-        runtime->failed = 1; return null_value();
+        runtime->exception_raised = 1;
+        if (arguments[0].type == VALUE_STRING) error_message(runtime, arguments[0].string);
+        else error_message(runtime, "raised non-string value");
+        return null_value();
     }
     if (strcmp(name, "destroy") == 0 && count == 1 && arguments[0].type == VALUE_INSTANCE) {
         Instance *instance = arguments[0].instance;
@@ -746,6 +850,28 @@ static void execute_while(Runtime *runtime, int infinite) {
     if (!enabled && runtime->current != block_start) runtime->current = block_start;
     if (!enabled) skip_block(runtime);
 }
+static void execute_try(Runtime *runtime) {
+    execute_block(runtime);
+    int caught = runtime->failed;
+    char *message = duplicate_text(runtime->error_message ? runtime->error_message : "runtime error");
+    skip_lines(runtime);
+    if (!match(runtime, TOKEN_CATCH)) {
+        if (caught) error_at(runtime, "try requires catch after an error");
+        free(message); return;
+    }
+    skip_lines(runtime);
+    if (!match(runtime, TOKEN_LEFT_ANGLE)) { error_at(runtime, "catch expects <error>"); free(message); return; }
+    Token *name = peek(runtime);
+    if (!match(runtime, TOKEN_IDENTIFIER) || !match(runtime, TOKEN_RIGHT_ANGLE)) { error_at(runtime, "catch expects an error variable"); free(message); return; }
+    skip_lines(runtime);
+    if (caught) {
+        runtime->failed = 0;
+        runtime->exception_raised = 0;
+        Value error = string_value(message); set_variable(runtime, name->lexeme, error, 0); free_value(&error);
+        execute_block(runtime);
+    } else skip_block(runtime);
+    free(message);
+}
 static void execute_for(Runtime *runtime) {
     Token *name = peek(runtime);
     if (!match(runtime, TOKEN_IDENTIFIER) || !match(runtime, TOKEN_IN)) { error_at(runtime, "for expects variable in collection"); return; }
@@ -781,6 +907,7 @@ static void execute_statement(Runtime *runtime) {
         Value value = expression(runtime); set_variable(runtime, name->lexeme, value, is_const); free_value(&value); return;
     }
     if (match(runtime, TOKEN_IF)) { execute_if(runtime); return; }
+    if (match(runtime, TOKEN_TRY)) { execute_try(runtime); return; }
     if (match(runtime, TOKEN_WHILE)) { execute_while(runtime, 0); return; }
     if (match(runtime, TOKEN_LOOP)) { execute_while(runtime, 1); return; }
     if (match(runtime, TOKEN_FOR)) { execute_for(runtime); return; }
@@ -803,10 +930,13 @@ static void execute_program(Runtime *runtime) {
 int runtime_run(TokenList *tokens) {
     Runtime runtime = {.tokens = tokens, .return_value = null_value()};
     execute_program(&runtime);
+    if (runtime.failed && runtime.exception_raised)
+        fprintf(stderr, "Mellow exception: %s\n", runtime.error_message ? runtime.error_message : "runtime error");
     while (runtime.variables) { Variable *next = runtime.variables->next; free(runtime.variables->name); free_value(&runtime.variables->value); free(runtime.variables); runtime.variables = next; }
     while (runtime.functions) { Function *next = runtime.functions->next; for (size_t i = 0; i < runtime.functions->parameter_count; i++) free(runtime.functions->parameters[i]); free(runtime.functions->parameters); free(runtime.functions->name); free(runtime.functions); runtime.functions = next; }
     for (size_t i = 0; i < runtime.module_count; i++) { token_list_free(runtime.modules[i]); free(runtime.modules[i]); }
     free(runtime.modules);
+    free(runtime.error_message);
     free_value(&runtime.return_value);
     return runtime.failed ? 1 : 0;
 }
