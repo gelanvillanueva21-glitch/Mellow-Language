@@ -37,16 +37,20 @@ if gt<score, 10> [
 Comments use // for one line and /* ... */ for multiple lines. Newlines may be
 used between arguments and delimiters in calls and collection literals.
 .NH 1
-3. Values and Variables
+\fBcontains\fP is an alias for .B inside.
 .TP
 .B null
 The absence of a value. The literal is .B null.
 .TP
 .B number
-The current runtime stores integer and floating-point literals as C double
+.B abs<a>
+Common numeric helpers. .B min and .B max select a number; .B clamp limits a
+value to a range. .B abs returns magnitude.
 values. Examples: .B 42 and .B 3.14159.
 .TP
 .B string
+.B is_null<a>
+The related predicates .B is_number, .B is_string, .B is_array, and .B is_list
 Text enclosed in double quotes. Example: .B "hello".
 .TP
 .B char
@@ -220,6 +224,11 @@ Returns the boolean disjunction of a and b.
 .TP
 .B not<a>
 Returns the boolean negation of a.
+.TP
+.B inside<value, container>
+Returns only a boolean. For strings, it checks whether the first string occurs
+inside the second. For arrays and lists, it checks whether an equal item exists.
+contains is an alias for inside.
 .NH 1
 7. Collection and Conversion Builtins
 .TP
@@ -243,6 +252,68 @@ Prints each argument separated by a space, followed by a newline.
 .B set<name, value>
 Replaces the value of a mutable variable. The first argument is a variable name,
 not an evaluated expression.
+.TP
+get<container, key>, has<container, key>, put<dictionary, key, value>
+Read a dictionary key or collection index, test whether it exists, or add and
+replace a dictionary entry.
+.TP
+.B range<start, end, step>
+Creates a numeric list with an exclusive end. The step is optional and defaults
+to one.
+.TP
+for item in collection [ ... ]
+Iterates over an array or list.
+.TP
+.B input<> or input<"prompt">
+Reads one terminal line as a string. An optional string prompt is printed before
+reading.
+.TP
+.B to_number<value>, to_float<value>, to_int<value>
+Convert numeric text. .B to_int truncates the numeric value.
+.TP
+.B to_bool<value>
+Converts booleans, nonzero numbers, or the strings true, false, 1, and 0.
+.TP
+.B input<> or input<"prompt">
+Reads one terminal line as a string. An optional string prompt is printed before
+reading.
+.TP
+.B to_number<value>, to_float<value>, to_int<value>
+Convert numeric text. .B to_int truncates the numeric value.
+.TP
+.B to_bool<value>
+Converts booleans, nonzero numbers, or the strings true, false, 1, and 0.
+.TP
+abs<a>, min<a, b>, max<a, b>, clamp<a, low, high>
+Common numeric helpers. abs returns magnitude; min and max select a number;
+clamp limits a value to a range.
+.TP
+.B floor<a>, ceil<a>, round<a>
+Return the corresponding rounded numeric value.
+.TP
+is_null<a>, is_number<a>, is_string<a>, is_array<a>, is_list<a>
+Return a boolean indicating whether a value has the requested runtime type.
+.NH 1
+9. Modules and Imports
+.PP
+An import executes declarations from another Mellow file in the same runtime.
+Use an angle-bracket selector to import only named functions or classes;
+variables and top-level executable statements are ignored. Paths are relative
+to the process working directory and may name files in subfolders.
+.DS
+import "test/lib/greetings.mll" <welcome>
+print<welcome<"Mellow">>
+.DE
+.PP
+The legacy form .B import "path.mll" <> imports every function and class.
+Imported files may import other files. Import cycles are not yet detected.
+.NH 1
+10. Private Methods
+.PP
+Inside a class, .B private func declares a private method. It may be called by
+methods of its declaring class or subclasses, including through .B this.method<>
+or .B super.method<>. External callers and unrelated classes are rejected.
+Nested classes do not automatically receive private access.
 .NH 1
 8. Interpolation
 .PP
@@ -270,7 +341,33 @@ func factorial<n> [
 print<factorial<5>>
 .DE
 .NH 1
-10. Command-Line Tools
+10. Object-Oriented Programming
+.PP
+Classes use square-bracket bodies. Fields use .B let, constructors use the
+method name .B init, and methods use angle-bracket calls.
+.DS
+class Person [
+    let name = ""
+    func init<n> [
+        set<this.name, n>
+    ]
+    func greet<> [
+        print<"Hello, ", this.name>
+    ]
+]
+let person = Person<"Ada">
+person.greet<>
+.DE
+.PP
+Single inheritance uses .B class Student : Person [...]. Inherited fields,
+dynamic method lookup, overriding, and parent calls through .B super.method<>
+are supported. .B destroy<instance> calls an optional .B free<> method before
+releasing the instance.
+.PP
+Visibility modifiers, static members, automatic garbage collection, and
+structured access control are reserved for later runtime layers.
+.NH 1
+11. Command-Line Tools
 .TP
 .B make
 Builds the interpreter. Run it from the project root.
@@ -284,23 +381,23 @@ Prints the lexer token stream with source locations.
 .B ./mellow --repl
 Starts the interactive read-evaluate-print loop. Type .B exit to leave it.
 .NH 1
-11. Reserved Keywords
+12. Reserved Keywords
 .PP
 The following words are lexed and reserved for the next runtime layers:
-\fBfor\fP, \fBclass\fP, \fBpublic\fP, \fBprivate\fP, \fBimport\fP, \fBtry\fP, \fBcatch\fP, \fBfn\fP, \fBthis\fP, \fBsuper\fP, and.
+\fBfor\fP, \fBpublic\fP, \fBprivate\fP, \fBimport\fP, \fBtry\fP, \fBcatch\fP,
+\fBfn\fP, and.
 .PP
 .B for
-is reserved for collection iteration. .B class, .B public, and .B private are
-reserved for the object system. .B this and .B super are reserved for method
-access. .B import is reserved for modules. .B try and .B catch are reserved
+is reserved for collection iteration. .B public and .B private are reserved
+for access control. .B import is reserved for modules. .B try and .B catch are reserved
 for structured error recovery. .B fn is reserved for anonymous functions and
 closures. These features are
 specified in the project roadmap but are not executable in the current core.
 .NH 1
-12. Current Limitations
+13. Current Limitations
 .PP
 Dictionaries, indexing, default parameters, lambdas, closures, structured
-try/catch recovery, modules, classes, inheritance, and garbage collection are
+try/catch recovery, modules, visibility, static members, and garbage collection are
 not yet implemented. The lexer recognizes much of their vocabulary so these
 features can be added without changing the central call and block syntax.
 .bp

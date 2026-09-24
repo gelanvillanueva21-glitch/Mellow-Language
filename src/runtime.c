@@ -1,5 +1,6 @@
 #include "runtime.h"
 #include "runtime/model.h"
+#include "utils/file.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -7,6 +8,7 @@
 #include <string.h>
 
 static Variable *find_variable(Runtime *runtime, const char *name);
+static Field *instance_field(Instance *instance, const char *name);
 
 static char *duplicate_text(const char *text) {
     size_t length = strlen(text) + 1;
@@ -54,6 +56,12 @@ static void error_at(Runtime *runtime, const char *message) {
 static Variable *find_variable(Runtime *runtime, const char *name) {
     for (Variable *variable = runtime->variables; variable; variable = variable->next)
         if (strcmp(variable->name, name) == 0) return variable;
+    Field *field = instance_field(runtime->this_instance, name);
+    if (field) {
+        static Variable result;
+        result.name = field->name; result.value = field->value; result.constant = 0; result.next = NULL;
+        return &result;
+    }
     return NULL;
 }
 static Function *find_function(Runtime *runtime, const char *name) {
@@ -61,8 +69,70 @@ static Function *find_function(Runtime *runtime, const char *name) {
         if (strcmp(function->name, name) == 0) return function;
     return NULL;
 }
+static Class *find_class(Runtime *runtime, const char *name) {
+    for (Class *class_info = runtime->classes; class_info; class_info = class_info->next)
+        if (strcmp(class_info->name, name) == 0) return class_info;
+    return NULL;
+}
+static Field *find_field(Field *fields, const char *name) {
+    for (Field *field = fields; field; field = field->next)
+        if (strcmp(field->name, name) == 0) return field;
+    return NULL;
+}
+static Function *find_method(Class *class_info, const char *name) {
+    for (Class *current = class_info; current; current = current->parent)
+        for (Function *method = current->methods; method; method = method->next)
+            if (strcmp(method->name, name) == 0) return method;
+    return NULL;
+}
+static int is_descendant(Class *class_info, Class *ancestor) {
+    for (Class *current = class_info; current; current = current->parent)
+        if (current == ancestor) return 1;
+    return 0;
+}
+static int selected_import(Runtime *runtime, const char *name) {
+    if (!runtime->importing_module || runtime->import_name_count == 0) return 1;
+    for (size_t i = 0; i < runtime->import_name_count; i++)
+        if (strcmp(runtime->import_names[i], name) == 0) return 1;
+    return 0;
+}
+static int can_access_method(Runtime *runtime, Function *method) {
+    return !method->is_private || (runtime->active_class && is_descendant(runtime->active_class, method->owner));
+}
+static Field *instance_field(Instance *instance, const char *name) {
+    return instance ? find_field(instance->fields, name) : NULL;
+}
+static Value instance_value(Instance *instance) {
+    return (Value){VALUE_INSTANCE, 0, 0, NULL, NULL, NULL, instance};
+}
+static void copy_class_fields(Class *class_info, Instance *instance) {
+    if (class_info->parent) copy_class_fields(class_info->parent, instance);
+    for (Field *field = class_info->fields; field; field = field->next) {
+        Field *copy = calloc(1, sizeof(*copy));
+        copy->name = duplicate_text(field->name); copy->value = copy_value(field->value);
+        copy->next = instance->fields; instance->fields = copy;
+    }
+}
+static Instance *new_instance(Class *class_info) {
+    Instance *instance = calloc(1, sizeof(*instance));
+    instance->class_info = class_info; copy_class_fields(class_info, instance);
+    return instance;
+}
+static void free_instance(Instance *instance) {
+    if (!instance) return;
+    Field *field = instance->fields;
+    while (field) { Field *next = field->next; free(field->name); free_value(&field->value); free(field); field = next; }
+    free(instance);
+}
 static void set_variable(Runtime *runtime, const char *name, Value value, int constant) {
-    Variable *variable = find_variable(runtime, name);
+    Field *field = instance_field(runtime->this_instance, name);
+    Variable *local = NULL;
+    for (Variable *candidate = runtime->variables; candidate; candidate = candidate->next)
+        if (strcmp(candidate->name, name) == 0) { local = candidate; break; }
+    if (field && !local) {
+        free_value(&field->value); field->value = copy_value(value); return;
+    }
+    Variable *variable = local;
     if (!variable) {
         variable = calloc(1, sizeof(*variable));
         variable->name = duplicate_text(name); variable->next = runtime->variables;
@@ -78,6 +148,23 @@ static void skip_lines(Runtime *runtime) { while (match(runtime, TOKEN_NEWLINE) 
 
 static Value expression(Runtime *runtime);
 static Value call_user_function(Runtime *runtime, Function *function, Value *arguments, size_t count);
+static void execute_statement(Runtime *runtime);
+static void execute_program(Runtime *runtime);
+static size_t parse_arguments(Runtime *runtime, Value *arguments) {
+    size_t count = 0;
+    skip_lines(runtime);
+    if (!match(runtime, TOKEN_RIGHT_ANGLE)) {
+        do {
+            skip_lines(runtime);
+            if (count == 32) { error_at(runtime, "too many arguments"); break; }
+            arguments[count++] = expression(runtime);
+            skip_lines(runtime);
+        } while (match(runtime, TOKEN_COMMA));
+        skip_lines(runtime);
+        if (!match(runtime, TOKEN_RIGHT_ANGLE)) error_at(runtime, "expected > after call arguments");
+    }
+    return count;
+}
 
 static int is_number_pair(Value *arguments, size_t count) {
     return count == 2 && arguments[0].type == VALUE_NUMBER && arguments[1].type == VALUE_NUMBER;
@@ -86,6 +173,13 @@ static int named_as(const char *name, const char *short_name, const char *long_n
     return strcmp(name, short_name) == 0 || strcmp(name, long_name) == 0;
 }
 static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, size_t count) {
+    if (strcmp(name, "input") == 0 && (count == 0 || (count == 1 && arguments[0].type == VALUE_STRING))) {
+        if (count == 1) { fputs(arguments[0].string, stdout); fflush(stdout); }
+        char buffer[4096];
+        if (!fgets(buffer, sizeof(buffer), stdin)) return string_value("");
+        buffer[strcspn(buffer, "\r\n")] = '\0';
+        return string_value(buffer);
+    }
     if (strcmp(name, "print") == 0 || strcmp(name, "Print") == 0) {
         for (size_t i = 0; i < count; i++) {
             if (i) putchar(' ');
@@ -93,9 +187,19 @@ static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, 
         }
         putchar('\n'); return null_value();
     }
-    if (strcmp(name, "raise") == 0 && count == 1) {
+    if (strcmp(name, "raise") == 0 && count == 1) { 
         fprintf(stderr, "Mellow exception: "); print_value(arguments[0]); fputc('\n', stderr);
         runtime->failed = 1; return null_value();
+    }
+    if (strcmp(name, "destroy") == 0 && count == 1 && arguments[0].type == VALUE_INSTANCE) {
+        Instance *instance = arguments[0].instance;
+        Function *destructor = find_method(instance->class_info, "free");
+        if (destructor) {
+            Instance *saved_this = runtime->this_instance; runtime->this_instance = instance;
+            call_user_function(runtime, destructor, NULL, 0);
+            runtime->this_instance = saved_this;
+        }
+        free_instance(instance); return null_value();
     }
     if (count < 1 && (strcmp(name, "len") == 0 || strcmp(name, "to_string") == 0)) { error_at(runtime, "builtin needs an argument"); return null_value(); }
     if ((strcmp(name, "add") == 0 || strcmp(name, "sub") == 0 || strcmp(name, "mul") == 0 || strcmp(name, "div") == 0 || strcmp(name, "mod") == 0 || strcmp(name, "pow") == 0) && count == 2) {
@@ -131,7 +235,111 @@ static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, 
     if (strcmp(name, "and") == 0 && count == 2) return bool_value(arguments[0].boolean && arguments[1].boolean);
     if (strcmp(name, "or") == 0 && count == 2) return bool_value(arguments[0].boolean || arguments[1].boolean);
     if (strcmp(name, "not") == 0 && count == 1) return bool_value(!arguments[0].boolean);
+    if ((strcmp(name, "abs") == 0 || strcmp(name, "floor") == 0 || strcmp(name, "ceil") == 0 || strcmp(name, "round") == 0) && count == 1) {
+        if (arguments[0].type != VALUE_NUMBER) { error_at(runtime, "numeric builtin expects a number"); return null_value(); }
+        if (strcmp(name, "abs") == 0) return number_value(fabs(arguments[0].number));
+        if (strcmp(name, "floor") == 0) return number_value(floor(arguments[0].number));
+        if (strcmp(name, "ceil") == 0) return number_value(ceil(arguments[0].number));
+        return number_value(round(arguments[0].number));
+    }
+    if ((strcmp(name, "min") == 0 || strcmp(name, "max") == 0) && count == 2) {
+        if (!is_number_pair(arguments, count)) { error_at(runtime, "min and max expect numbers"); return null_value(); }
+        return number_value(strcmp(name, "min") == 0 ? fmin(arguments[0].number, arguments[1].number) : fmax(arguments[0].number, arguments[1].number));
+    }
+    if (strcmp(name, "clamp") == 0 && count == 3) {
+        if (arguments[0].type != VALUE_NUMBER || arguments[1].type != VALUE_NUMBER || arguments[2].type != VALUE_NUMBER) { error_at(runtime, "clamp expects numbers"); return null_value(); }
+        return number_value(fmin(fmax(arguments[0].number, arguments[1].number), arguments[2].number));
+    }
+    if (strcmp(name, "range") == 0 && (count == 2 || count == 3)) {
+        if (arguments[0].type != VALUE_NUMBER || arguments[1].type != VALUE_NUMBER || (count == 3 && arguments[2].type != VALUE_NUMBER)) { error_at(runtime, "range expects numbers"); return null_value(); }
+        double step = count == 3 ? arguments[2].number : 1;
+        if (step == 0) { error_at(runtime, "range step cannot be zero"); return null_value(); }
+        Value result = collection_value(VALUE_LIST);
+        for (double value = arguments[0].number; step > 0 ? value < arguments[1].number : value > arguments[1].number; value += step) collection_append(result, number_value(value));
+        return result;
+    }
+    if ((strcmp(name, "get") == 0 || strcmp(name, "has") == 0) && count == 2) {
+        Value container = arguments[0];
+        if (container.type == VALUE_DICT && arguments[1].type == VALUE_STRING) {
+            Value *found = dictionary_get(container, arguments[1].string);
+            return strcmp(name, "has") == 0 ? bool_value(found != NULL) : (found ? copy_value(*found) : null_value());
+        }
+        if ((container.type == VALUE_ARRAY || container.type == VALUE_LIST) && arguments[1].type == VALUE_NUMBER) {
+            long index = (long)arguments[1].number;
+            if (index < 0 || (size_t)index >= container.collection->count) return strcmp(name, "has") == 0 ? bool_value(0) : null_value();
+            return strcmp(name, "has") == 0 ? bool_value(1) : copy_value(container.collection->items[index]);
+        }
+        error_at(runtime, "get/has expects a dictionary key or collection index"); return null_value();
+    }
+    if (strcmp(name, "put") == 0 && count == 3 && arguments[0].type == VALUE_DICT && arguments[1].type == VALUE_STRING) {
+        dictionary_set(&arguments[0], arguments[1].string, arguments[2]);
+        return null_value();
+    }
+    if ((strcmp(name, "is_null") == 0 || strcmp(name, "is_number") == 0 || strcmp(name, "is_string") == 0 || strcmp(name, "is_array") == 0 || strcmp(name, "is_list") == 0) && count == 1) {
+        ValueType type = arguments[0].type;
+        if (strcmp(name, "is_null") == 0) return bool_value(type == VALUE_NULL);
+        if (strcmp(name, "is_number") == 0) return bool_value(type == VALUE_NUMBER);
+        if (strcmp(name, "is_string") == 0) return bool_value(type == VALUE_STRING);
+        if (strcmp(name, "is_array") == 0) return bool_value(type == VALUE_ARRAY);
+        return bool_value(type == VALUE_LIST);
+    }
+    if ((strcmp(name, "abs") == 0 || strcmp(name, "floor") == 0 || strcmp(name, "ceil") == 0 || strcmp(name, "round") == 0) && count == 1) {
+        if (arguments[0].type != VALUE_NUMBER) { error_at(runtime, "numeric builtin expects a number"); return null_value(); }
+        if (strcmp(name, "abs") == 0) return number_value(fabs(arguments[0].number));
+        if (strcmp(name, "floor") == 0) return number_value(floor(arguments[0].number));
+        if (strcmp(name, "ceil") == 0) return number_value(ceil(arguments[0].number));
+        return number_value(round(arguments[0].number));
+    }
+    if ((strcmp(name, "min") == 0 || strcmp(name, "max") == 0) && count == 2) {
+        if (!is_number_pair(arguments, count)) { error_at(runtime, "min and max expect numbers"); return null_value(); }
+        return number_value(strcmp(name, "min") == 0 ? fmin(arguments[0].number, arguments[1].number) : fmax(arguments[0].number, arguments[1].number));
+    }
+    if (strcmp(name, "clamp") == 0 && count == 3) {
+        if (arguments[0].type != VALUE_NUMBER || arguments[1].type != VALUE_NUMBER || arguments[2].type != VALUE_NUMBER) { error_at(runtime, "clamp expects numbers"); return null_value(); }
+        return number_value(fmin(fmax(arguments[0].number, arguments[1].number), arguments[2].number));
+    }
+    if ((strcmp(name, "is_null") == 0 || strcmp(name, "is_number") == 0 || strcmp(name, "is_string") == 0 || strcmp(name, "is_array") == 0 || strcmp(name, "is_list") == 0) && count == 1) {
+        ValueType type = arguments[0].type;
+        if (strcmp(name, "is_null") == 0) return bool_value(type == VALUE_NULL);
+        if (strcmp(name, "is_number") == 0) return bool_value(type == VALUE_NUMBER);
+        if (strcmp(name, "is_string") == 0) return bool_value(type == VALUE_STRING);
+        if (strcmp(name, "is_array") == 0) return bool_value(type == VALUE_ARRAY);
+        return bool_value(type == VALUE_LIST);
+    }
+    if ((strcmp(name, "inside") == 0 || strcmp(name, "contains") == 0) && count == 2) {
+        Value needle = arguments[0];
+        Value container = arguments[1];
+        if (container.type == VALUE_STRING) {
+            if (needle.type != VALUE_STRING) { error_at(runtime, "inside expects a string value for a string container"); return null_value(); }
+            return bool_value(strstr(container.string, needle.string) != NULL);
+        }
+        if (container.type == VALUE_ARRAY || container.type == VALUE_LIST) {
+            for (size_t i = 0; i < container.collection->count; i++)
+                if (value_equal(needle, container.collection->items[i])) return bool_value(1);
+            return bool_value(0);
+        }
+        if (container.type == VALUE_DICT && needle.type == VALUE_STRING) return bool_value(dictionary_has(container, needle.string));
+        error_at(runtime, "inside expects a string, array, or list container");
+        return null_value();
+    }
     if (strcmp(name, "type") == 0 && count == 1) return string_value(value_type_name(arguments[0]));
+    if ((strcmp(name, "to_number") == 0 || strcmp(name, "to_float") == 0 || strcmp(name, "to_int") == 0) && count == 1) {
+        if (arguments[0].type == VALUE_NUMBER) return strcmp(name, "to_int") == 0 ? number_value(trunc(arguments[0].number)) : copy_value(arguments[0]);
+        if (arguments[0].type != VALUE_STRING) { error_at(runtime, "numeric conversion expects a string or number"); return null_value(); }
+        char *end = NULL; double number = strtod(arguments[0].string, &end);
+        while (end && (*end == ' ' || *end == '\t')) end++;
+        if (end == arguments[0].string || (end && *end != '\0')) { error_at(runtime, "invalid numeric input"); return null_value(); }
+        return strcmp(name, "to_int") == 0 ? number_value(trunc(number)) : number_value(number);
+    }
+    if (strcmp(name, "to_bool") == 0 && count == 1) {
+        if (arguments[0].type == VALUE_BOOL) return copy_value(arguments[0]);
+        if (arguments[0].type == VALUE_NUMBER) return bool_value(arguments[0].number != 0);
+        if (arguments[0].type == VALUE_STRING) {
+            if (strcmp(arguments[0].string, "true") == 0 || strcmp(arguments[0].string, "1") == 0) return bool_value(1);
+            if (strcmp(arguments[0].string, "false") == 0 || strcmp(arguments[0].string, "0") == 0) return bool_value(0);
+        }
+        error_at(runtime, "invalid boolean input; use true, false, 1, or 0"); return null_value();
+    }
     if (strcmp(name, "list") == 0) {
         Value result = collection_value(VALUE_LIST);
         for (size_t i = 0; i < count; i++) collection_append(result, arguments[i]);
@@ -139,6 +347,7 @@ static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, 
     }
     if (strcmp(name, "len") == 0 && arguments[0].type == VALUE_STRING) return number_value((double)strlen(arguments[0].string));
     if (strcmp(name, "len") == 0 && (arguments[0].type == VALUE_ARRAY || arguments[0].type == VALUE_LIST)) return number_value((double)arguments[0].collection->count);
+    if (strcmp(name, "len") == 0 && arguments[0].type == VALUE_DICT) { size_t count = 0; for (DictEntry *entry = arguments[0].dictionary; entry; entry = entry->next) count++; return number_value((double)count); }
     if (strcmp(name, "to_string") == 0) {
         char buffer[64];
         if (arguments[0].type == VALUE_STRING) return copy_value(arguments[0]);
@@ -163,49 +372,139 @@ static Value expression(Runtime *runtime) {
         Value result = collection_value(VALUE_ARRAY);
         skip_lines(runtime);
         if (!match(runtime, TOKEN_RIGHT_BRACE)) {
-            do {
-                skip_lines(runtime);
-                Value item = expression(runtime);
-                collection_append(result, item);
-                free_value(&item);
-                skip_lines(runtime);
-            } while (match(runtime, TOKEN_COMMA));
             skip_lines(runtime);
-            if (!match(runtime, TOKEN_RIGHT_BRACE)) error_at(runtime, "expected } after array literal");
+            Value first = expression(runtime);
+            skip_lines(runtime);
+            if (match(runtime, TOKEN_COLON)) {
+                free(result.collection);
+                result = dictionary_value();
+                if (first.type != VALUE_STRING) { error_at(runtime, "dictionary keys must be strings"); free_value(&first); return null_value(); }
+                Value value = expression(runtime); dictionary_set(&result, first.string, value); free_value(&first); free_value(&value);
+                while (match(runtime, TOKEN_COMMA)) {
+                    skip_lines(runtime);
+                    Value key = expression(runtime); skip_lines(runtime);
+                    if (!match(runtime, TOKEN_COLON) || key.type != VALUE_STRING) { error_at(runtime, "expected string dictionary key and colon"); free_value(&key); break; }
+                    Value item = expression(runtime); dictionary_set(&result, key.string, item); free_value(&key); free_value(&item); skip_lines(runtime);
+                }
+            } else {
+                collection_append(result, first); free_value(&first);
+                while (match(runtime, TOKEN_COMMA)) { skip_lines(runtime); Value item = expression(runtime); collection_append(result, item); free_value(&item); skip_lines(runtime); }
+            }
+            skip_lines(runtime);
+            if (!match(runtime, TOKEN_RIGHT_BRACE)) error_at(runtime, "expected } after collection literal");
         }
         return result;
     }
+    if (token->type == TOKEN_THIS) {
+        if (match(runtime, TOKEN_DOT)) {
+            Token *member = peek(runtime);
+            if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "expected this member name"); return null_value(); }
+            if (match(runtime, TOKEN_LEFT_ANGLE)) {
+                Value arguments[32]; size_t count = parse_arguments(runtime, arguments);
+                Function *method = runtime->this_instance ? find_method(runtime->this_instance->class_info, member->lexeme) : NULL;
+                Value result = method && can_access_method(runtime, method) ? call_user_function(runtime, method, arguments, count) : null_value();
+                if (!method) error_at(runtime, "unknown this method");
+                else if (!can_access_method(runtime, method)) error_at(runtime, "private method is not accessible here");
+                for (size_t i = 0; i < count; i++) free_value(&arguments[i]);
+                return result;
+            }
+            Field *field = instance_field(runtime->this_instance, member->lexeme);
+            if (!field) { error_at(runtime, "unknown this field"); return null_value(); }
+            return copy_value(field->value);
+        }
+        return instance_value(runtime->this_instance);
+    }
+    if (token->type == TOKEN_SUPER) {
+        if (!match(runtime, TOKEN_DOT)) { error_at(runtime, "expected . after super"); return null_value(); }
+        Token *method_name = peek(runtime);
+        if (!match(runtime, TOKEN_IDENTIFIER) || !match(runtime, TOKEN_LEFT_ANGLE)) { error_at(runtime, "expected super method call"); return null_value(); }
+        Value arguments[32]; size_t count = parse_arguments(runtime, arguments);
+        Function *method = runtime->this_instance ? find_method(runtime->this_instance->class_info->parent, method_name->lexeme) : NULL;
+        Value result = method && can_access_method(runtime, method) ? call_user_function(runtime, method, arguments, count) : null_value();
+        if (!method) error_at(runtime, "unknown super method");
+        else if (!can_access_method(runtime, method)) error_at(runtime, "private method is not accessible here");
+        for (size_t i = 0; i < count; i++) free_value(&arguments[i]);
+        return result;
+    }
     if (token->type == TOKEN_IDENTIFIER || token->type == TOKEN_RAISE || token->type == TOKEN_AND || token->type == TOKEN_OR || token->type == TOKEN_NOT) {
+        if (match(runtime, TOKEN_DOT)) {
+            Token *member = peek(runtime);
+            if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "expected member name"); return null_value(); }
+            Variable *base = find_variable(runtime, token->lexeme);
+            if (!base || base->value.type != VALUE_INSTANCE) { error_at(runtime, "member access requires an instance"); return null_value(); }
+            Instance *instance = base->value.instance;
+            if (match(runtime, TOKEN_LEFT_ANGLE)) {
+                Value arguments[32]; size_t count = parse_arguments(runtime, arguments);
+                Function *method = find_method(instance->class_info, member->lexeme);
+                Instance *saved_this = runtime->this_instance; runtime->this_instance = instance;
+                Value result = method && can_access_method(runtime, method) ? call_user_function(runtime, method, arguments, count) : null_value();
+                runtime->this_instance = saved_this;
+                if (!method) error_at(runtime, "unknown instance method");
+                else if (!can_access_method(runtime, method)) error_at(runtime, "private method is not accessible here");
+                for (size_t i = 0; i < count; i++) free_value(&arguments[i]);
+                return result;
+            }
+            Field *field = instance_field(instance, member->lexeme);
+            if (!field) { error_at(runtime, "unknown instance field"); return null_value(); }
+            return copy_value(field->value);
+        }
         if (match(runtime, TOKEN_LEFT_ANGLE)) {
             Value arguments[32]; size_t count = 0;
             skip_lines(runtime);
             if (strcmp(token->lexeme, "set") == 0) {
                 Token *name = peek(runtime);
-                if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "set expects a variable name"); return null_value(); }
+                char *field_name = NULL;
+                if (match(runtime, TOKEN_THIS)) {
+                    if (!match(runtime, TOKEN_DOT)) { error_at(runtime, "set expects this.field"); return null_value(); }
+                    Token *member = peek(runtime);
+                    if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "set expects a field name"); return null_value(); }
+                    field_name = member->lexeme;
+                } else if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "set expects a variable name"); return null_value(); }
+                else field_name = name->lexeme;
                 skip_lines(runtime);
                 if (!match(runtime, TOKEN_COMMA)) { error_at(runtime, "set expects a value"); return null_value(); }
                 Value value = expression(runtime);
                 skip_lines(runtime);
                 if (!match(runtime, TOKEN_RIGHT_ANGLE)) error_at(runtime, "expected > after set");
-                Variable *variable = find_variable(runtime, name->lexeme);
+                Variable *variable = find_variable(runtime, field_name);
                 if (!variable) error_at(runtime, "cannot set an unknown variable");
                 else if (variable->constant) error_at(runtime, "cannot set a const variable");
-                else { free_value(&variable->value); variable->value = copy_value(value); }
+                else {
+                    Field *field = instance_field(runtime->this_instance, field_name);
+                    if (field) { free_value(&field->value); field->value = copy_value(value); }
+                    else { free_value(&variable->value); variable->value = copy_value(value); }
+                }
                 free_value(&value);
                 return null_value();
             }
-            if (!match(runtime, TOKEN_RIGHT_ANGLE)) {
-                do {
-                    skip_lines(runtime);
-                    if (count == 32) { error_at(runtime, "too many arguments"); break; }
-                    arguments[count++] = expression(runtime);
-                    skip_lines(runtime);
-                } while (match(runtime, TOKEN_COMMA));
-                skip_lines(runtime);
-                if (!match(runtime, TOKEN_RIGHT_ANGLE)) error_at(runtime, "expected > after call arguments");
+            if (strcmp(token->lexeme, "put") == 0) {
+                Token *name = peek(runtime);
+                if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "put expects a dictionary variable"); return null_value(); }
+                if (!match(runtime, TOKEN_COMMA)) { error_at(runtime, "put expects a key"); return null_value(); }
+                Value key = expression(runtime);
+                if (key.type != VALUE_STRING) { error_at(runtime, "dictionary keys must be strings"); free_value(&key); return null_value(); }
+                if (!match(runtime, TOKEN_COMMA)) { error_at(runtime, "put expects a value"); free_value(&key); return null_value(); }
+                Value value = expression(runtime); skip_lines(runtime);
+                if (!match(runtime, TOKEN_RIGHT_ANGLE)) error_at(runtime, "expected > after put");
+                Variable *variable = find_variable(runtime, name->lexeme);
+                if (!variable || variable->value.type != VALUE_DICT) error_at(runtime, "put expects a dictionary variable");
+                else dictionary_set(&variable->value, key.string, value);
+                free_value(&key); free_value(&value); return null_value();
             }
+            count = parse_arguments(runtime, arguments);
             Function *function = find_function(runtime, token->lexeme);
-            Value result = function ? call_user_function(runtime, function, arguments, count) : call_builtin(runtime, token->lexeme, arguments, count);
+            Class *class_info = find_class(runtime, token->lexeme);
+            Value result;
+            if (class_info) {
+                if (count == 0 && !find_method(class_info, "init")) result = instance_value(new_instance(class_info));
+                else {
+                    Instance *instance = new_instance(class_info); Instance *saved_this = runtime->this_instance; runtime->this_instance = instance;
+                    Function *constructor = find_method(class_info, "init");
+                    if (!constructor) { error_at(runtime, "constructor init not found"); result = null_value(); }
+                    else { call_user_function(runtime, constructor, arguments, count); result = instance_value(instance); }
+                    runtime->this_instance = saved_this;
+                }
+            } else result = function ? call_user_function(runtime, function, arguments, count) : call_builtin(runtime, token->lexeme, arguments, count);
             for (size_t i = 0; i < count; i++) free_value(&arguments[i]);
             return result;
         }
@@ -221,6 +520,7 @@ static int truthy(Value value) {
     if (value.type == VALUE_BOOL) return value.boolean;
     if (value.type == VALUE_NUMBER) return value.number != 0;
     if (value.type == VALUE_STRING) return value.string[0] != '\0';
+    if (value.type == VALUE_DICT) return value.dictionary != NULL;
     return value.collection->count != 0;
 }
 static void skip_block(Runtime *runtime) {
@@ -242,11 +542,61 @@ static void execute_block(Runtime *runtime) {
     }
     match(runtime, TOKEN_RIGHT_BRACKET);
 }
+static void remember_module(Runtime *runtime, TokenList *tokens) {
+    if (runtime->module_count == runtime->module_capacity) {
+        size_t capacity = runtime->module_capacity == 0 ? 4 : runtime->module_capacity * 2;
+        runtime->modules = realloc(runtime->modules, capacity * sizeof(*runtime->modules));
+        runtime->module_capacity = capacity;
+    }
+    runtime->modules[runtime->module_count++] = tokens;
+}
+static void execute_import(Runtime *runtime) {
+    Token *path = peek(runtime);
+    if (!match(runtime, TOKEN_STRING)) { error_at(runtime, "import expects a quoted file path"); return; }
+    char **saved_names = runtime->import_names;
+    size_t saved_count = runtime->import_name_count;
+    int saved_importing = runtime->importing_module;
+    runtime->import_names = NULL; runtime->import_name_count = 0;
+    if (match(runtime, TOKEN_LEFT_ANGLE)) {
+        if (!match(runtime, TOKEN_RIGHT_ANGLE)) {
+            do {
+                Token *name = peek(runtime);
+                if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "import selectors must be function or class names"); break; }
+                runtime->import_names = realloc(runtime->import_names, (runtime->import_name_count + 1) * sizeof(char *));
+                runtime->import_names[runtime->import_name_count++] = duplicate_text(name->lexeme);
+            } while (match(runtime, TOKEN_COMMA));
+            if (!match(runtime, TOKEN_RIGHT_ANGLE)) error_at(runtime, "expected > after import names");
+        }
+    }
+    char *source = read_file(path->lexeme);
+    if (!source) { error_at(runtime, "could not load imported module"); return; }
+    TokenList *module = malloc(sizeof(*module));
+    if (!module) { free(source); error_at(runtime, "could not allocate imported module"); return; }
+    *module = lexer_scan(source); free(source);
+    remember_module(runtime, module);
+    TokenList *saved_tokens = runtime->tokens;
+    size_t saved_current = runtime->current;
+    runtime->tokens = module; runtime->current = 0; runtime->importing_module = 1;
+    execute_program(runtime);
+    runtime->tokens = saved_tokens; runtime->current = saved_current; runtime->importing_module = saved_importing;
+    for (size_t i = 0; i < runtime->import_name_count; i++) free(runtime->import_names[i]);
+    free(runtime->import_names); runtime->import_names = saved_names; runtime->import_name_count = saved_count;
+}
+static void skip_import_only_statement(Runtime *runtime) {
+    int depth = 0;
+    while (peek(runtime)->type != TOKEN_EOF) {
+        if (peek(runtime)->type == TOKEN_LEFT_BRACKET) depth++;
+        else if (peek(runtime)->type == TOKEN_RIGHT_BRACKET && depth > 0) depth--;
+        if (depth == 0 && (peek(runtime)->type == TOKEN_NEWLINE || peek(runtime)->type == TOKEN_SEMICOLON)) break;
+        advance(runtime);
+    }
+}
 static void declare_function(Runtime *runtime) {
     Token *name = peek(runtime);
     if (!match(runtime, TOKEN_IDENTIFIER) || !match(runtime, TOKEN_LEFT_ANGLE)) { error_at(runtime, "expected function name and parameters"); return; }
     Function *function = calloc(1, sizeof(*function));
     function->name = duplicate_text(name->lexeme);
+    function->token_source = runtime->tokens;
     skip_lines(runtime);
     if (!match(runtime, TOKEN_RIGHT_ANGLE)) {
         do {
@@ -269,24 +619,100 @@ static void declare_function(Runtime *runtime) {
         else advance(runtime);
     }
     function->body_end = runtime->current - 1;
-    function->next = runtime->functions;
-    runtime->functions = function;
+    if (selected_import(runtime, function->name)) {
+        function->next = runtime->functions;
+        runtime->functions = function;
+    } else {
+        for (size_t i = 0; i < function->parameter_count; i++) free(function->parameters[i]);
+        free(function->parameters); free(function->name); free(function);
+    }
+}
+static Function *parse_function_body(Runtime *runtime, const char *name, Class *owner) {
+    Function *function = calloc(1, sizeof(*function));
+    function->name = duplicate_text(name); function->owner = owner;
+    function->token_source = runtime->tokens;
+    skip_lines(runtime);
+    if (!match(runtime, TOKEN_RIGHT_ANGLE)) {
+        do {
+            skip_lines(runtime);
+            Token *parameter = peek(runtime);
+            if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "expected parameter name"); break; }
+            function->parameters = realloc(function->parameters, (function->parameter_count + 1) * sizeof(char *));
+            function->parameters[function->parameter_count++] = duplicate_text(parameter->lexeme);
+            skip_lines(runtime);
+        } while (match(runtime, TOKEN_COMMA));
+        if (!match(runtime, TOKEN_RIGHT_ANGLE)) error_at(runtime, "expected > after parameters");
+    }
+    skip_lines(runtime);
+    if (!match(runtime, TOKEN_LEFT_BRACKET)) { error_at(runtime, "expected [ after method signature"); return function; }
+    function->body_start = runtime->current;
+    int depth = 1;
+    while (peek(runtime)->type != TOKEN_EOF && depth > 0) {
+        if (match(runtime, TOKEN_LEFT_BRACKET)) depth++;
+        else if (match(runtime, TOKEN_RIGHT_BRACKET)) depth--;
+        else advance(runtime);
+    }
+    function->body_end = runtime->current - 1;
+    return function;
+}
+static void declare_class(Runtime *runtime) {
+    Token *name = peek(runtime);
+    if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "expected class name"); return; }
+    Class *class_info = calloc(1, sizeof(*class_info));
+    class_info->name = duplicate_text(name->lexeme);
+    if (match(runtime, TOKEN_COLON)) {
+        Token *parent = peek(runtime);
+        if (!match(runtime, TOKEN_IDENTIFIER)) error_at(runtime, "expected parent class name");
+        else class_info->parent = find_class(runtime, parent->lexeme);
+        if (!class_info->parent) error_at(runtime, "unknown parent class");
+    }
+    skip_lines(runtime);
+    if (!match(runtime, TOKEN_LEFT_BRACKET)) { error_at(runtime, "expected [ after class name"); free(class_info->name); free(class_info); return; }
+    while (peek(runtime)->type != TOKEN_EOF && peek(runtime)->type != TOKEN_RIGHT_BRACKET && !runtime->failed) {
+        skip_lines(runtime);
+        if (match(runtime, TOKEN_LET)) {
+            Token *field_name = peek(runtime);
+            if (!match(runtime, TOKEN_IDENTIFIER) || !match(runtime, TOKEN_EQUAL)) { error_at(runtime, "expected field name and ="); break; }
+            Value initial = expression(runtime);
+            Field *field = calloc(1, sizeof(*field)); field->name = duplicate_text(field_name->lexeme); field->value = initial;
+            field->next = class_info->fields; class_info->fields = field;
+        } else if (match(runtime, TOKEN_PRIVATE) || match(runtime, TOKEN_FUNC)) {
+            int is_private = runtime->tokens->items[runtime->current - 1].type == TOKEN_PRIVATE;
+            if (is_private && !match(runtime, TOKEN_FUNC)) { error_at(runtime, "private must be followed by func"); break; }
+            Token *method_name = peek(runtime);
+            if (!match(runtime, TOKEN_IDENTIFIER) || !match(runtime, TOKEN_LEFT_ANGLE)) { error_at(runtime, "expected method name and parameters"); break; }
+            Function *method = parse_function_body(runtime, method_name->lexeme, class_info);
+            method->is_private = is_private;
+            method->next = class_info->methods; class_info->methods = method;
+        } else advance(runtime);
+        skip_lines(runtime);
+    }
+    match(runtime, TOKEN_RIGHT_BRACKET);
+    if (selected_import(runtime, class_info->name)) {
+        class_info->next = runtime->classes; runtime->classes = class_info;
+    } else {
+        free(class_info->name); free(class_info);
+    }
 }
 static Value call_user_function(Runtime *runtime, Function *function, Value *arguments, size_t count) {
     if (count != function->parameter_count) { error_at(runtime, "wrong number of function arguments"); return null_value(); }
     Variable *saved_variables = runtime->variables;
     size_t saved_current = runtime->current;
+    TokenList *saved_tokens = runtime->tokens;
     int saved_return_signal = runtime->return_signal;
     Value saved_return_value = runtime->return_value;
+    Instance *saved_this = runtime->this_instance;
+    Class *saved_active_class = runtime->active_class;
     runtime->variables = NULL; runtime->return_signal = 0; runtime->return_value = null_value();
     for (size_t i = 0; i < count; i++) set_variable(runtime, function->parameters[i], arguments[i], 0);
     runtime->current = function->body_start - 1;
+    runtime->tokens = function->token_source; runtime->active_class = function->owner;
     execute_block(runtime);
     Value result = copy_value(runtime->return_value);
     while (runtime->variables) { Variable *next = runtime->variables->next; free(runtime->variables->name); free_value(&runtime->variables->value); free(runtime->variables); runtime->variables = next; }
     free_value(&runtime->return_value);
     runtime->return_value = saved_return_value; runtime->return_signal = saved_return_signal;
-    runtime->variables = saved_variables; runtime->current = saved_current;
+    runtime->variables = saved_variables; runtime->current = saved_current; runtime->tokens = saved_tokens; runtime->this_instance = saved_this; runtime->active_class = saved_active_class;
     return result;
 }
 static void execute_if(Runtime *runtime) {
@@ -320,8 +746,33 @@ static void execute_while(Runtime *runtime, int infinite) {
     if (!enabled && runtime->current != block_start) runtime->current = block_start;
     if (!enabled) skip_block(runtime);
 }
+static void execute_for(Runtime *runtime) {
+    Token *name = peek(runtime);
+    if (!match(runtime, TOKEN_IDENTIFIER) || !match(runtime, TOKEN_IN)) { error_at(runtime, "for expects variable in collection"); return; }
+    Value collection = expression(runtime);
+    if (collection.type != VALUE_ARRAY && collection.type != VALUE_LIST) { error_at(runtime, "for expects an array or list"); free_value(&collection); return; }
+    skip_lines(runtime);
+    size_t block_start = runtime->current;
+    size_t count = collection.collection->count;
+    for (size_t i = 0; i < count && !runtime->failed; i++) {
+        set_variable(runtime, name->lexeme, collection.collection->items[i], 0);
+        runtime->break_signal = runtime->continue_signal = 0;
+        runtime->current = block_start;
+        execute_block(runtime);
+        if (runtime->break_signal) { runtime->break_signal = 0; break; }
+        if (runtime->return_signal) break;
+    }
+    runtime->current = block_start;
+    skip_block(runtime);
+    free_value(&collection);
+}
 static void execute_statement(Runtime *runtime) {
     skip_lines(runtime);
+    if (runtime->importing_module && peek(runtime)->type != TOKEN_FUNC && peek(runtime)->type != TOKEN_CLASS && peek(runtime)->type != TOKEN_PRIVATE && peek(runtime)->type != TOKEN_IMPORT) {
+        skip_import_only_statement(runtime); return;
+    }
+    if (match(runtime, TOKEN_IMPORT)) { execute_import(runtime); return; }
+    if (match(runtime, TOKEN_CLASS)) { declare_class(runtime); return; }
     if (match(runtime, TOKEN_FUNC)) { declare_function(runtime); return; }
     int is_const = match(runtime, TOKEN_CONST);
     if (is_const || match(runtime, TOKEN_LET)) {
@@ -332,6 +783,7 @@ static void execute_statement(Runtime *runtime) {
     if (match(runtime, TOKEN_IF)) { execute_if(runtime); return; }
     if (match(runtime, TOKEN_WHILE)) { execute_while(runtime, 0); return; }
     if (match(runtime, TOKEN_LOOP)) { execute_while(runtime, 1); return; }
+    if (match(runtime, TOKEN_FOR)) { execute_for(runtime); return; }
     if (match(runtime, TOKEN_BREAK)) { runtime->break_signal = 1; return; }
     if (match(runtime, TOKEN_CONTINUE)) { runtime->continue_signal = 1; return; }
     if (match(runtime, TOKEN_RETURN)) {
@@ -341,14 +793,20 @@ static void execute_statement(Runtime *runtime) {
     Value value = expression(runtime); free_value(&value);
 }
 
-int runtime_run(TokenList *tokens) {
-    Runtime runtime = {tokens, 0, NULL, NULL, 0, 0, 0, 0, null_value()};
-    while (peek(&runtime)->type != TOKEN_EOF && !runtime.failed) {
-        execute_statement(&runtime);
-        skip_lines(&runtime);
+static void execute_program(Runtime *runtime) {
+    while (peek(runtime)->type != TOKEN_EOF && !runtime->failed) {
+        execute_statement(runtime);
+        skip_lines(runtime);
     }
+}
+
+int runtime_run(TokenList *tokens) {
+    Runtime runtime = {.tokens = tokens, .return_value = null_value()};
+    execute_program(&runtime);
     while (runtime.variables) { Variable *next = runtime.variables->next; free(runtime.variables->name); free_value(&runtime.variables->value); free(runtime.variables); runtime.variables = next; }
     while (runtime.functions) { Function *next = runtime.functions->next; for (size_t i = 0; i < runtime.functions->parameter_count; i++) free(runtime.functions->parameters[i]); free(runtime.functions->parameters); free(runtime.functions->name); free(runtime.functions); runtime.functions = next; }
+    for (size_t i = 0; i < runtime.module_count; i++) { token_list_free(runtime.modules[i]); free(runtime.modules[i]); }
+    free(runtime.modules);
     free_value(&runtime.return_value);
     return runtime.failed ? 1 : 0;
 }

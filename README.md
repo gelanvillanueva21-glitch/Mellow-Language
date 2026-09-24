@@ -61,17 +61,54 @@ src/
 	runtime.c              statement execution and expression dispatch
 	runtime/
 		value.c, value.h     value ownership, collections, equality, display
-		model.h              runtime state, variables, and function metadata
+		model.h              runtime state, variables, functions, classes, and instances
 	utils/
 		file.c, file.h       source file loading
 ```
 
-The next recommended architecture step is to add `environment.c/.h` for nested
-lexical scopes, then `object.c/.h` for classes, instances, fields, and method
-lookup. OOP should be implemented in this order: class declarations, instance
-construction with `init`, `this` field access, method calls, inheritance and
-`super`, then visibility and `free`. That order keeps constructors and dynamic
-dispatch testable without mixing them into memory management prematurely.
+The current runtime supports class declarations, `init` constructors, fields,
+`this` access, methods, single inheritance, `super`, and `destroy` with optional
+`free` destructors. The next architecture step is an explicit environment
+module for nested lexical scopes, followed by visibility, static members, and
+automatic garbage collection.
+
+Modules are currently loaded with `import "path/to/file.mll" <name, OtherClass>`.
+
+Terminal input is available through `input<>`. It always starts as text, then
+can be converted explicitly:
+
+```mellow
+let raw = input<"Enter a number: ">
+let amount = to_number<raw>
+print<add<amount, 10>>
+```
+
+Collections support dictionaries, lookup, mutation, ranges, and iteration:
+
+```mellow
+let scores = {"Gelan": 90, "Mellow": 85}
+put<scores, "Ada", 95>
+for score in range<1, 4> [
+	print<score>
+]
+```
+Only selected functions and classes are imported; module variables and top-level
+executable statements are ignored. The imported declarations execute in the
+same runtime, and paths are relative to the process working directory. The
+legacy `import "path/to/file.mll" <>` form imports every function and class.
+
+Inside classes, `private func` methods are accessible from the declaring class
+and subclasses, but not from outside callers or unrelated classes. Nested
+classes do not automatically receive private access.
+
+Terminal input is available through `input<>`. Input starts as text and can be
+converted explicitly:
+
+```mellow
+let raw = input<"Enter a number: ">
+let amount = to_number<raw>
+print<add<amount, 10>>
+```
 
 See [SPEC.md](SPEC.md) for the grammar and semantics. The next architectural
 step is replacing the direct evaluator with an explicit AST and scoped object

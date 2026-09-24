@@ -40,7 +40,7 @@ static TokenType keyword_type(const char *text) {
         {"true", TOKEN_TRUE}, {"false", TOKEN_FALSE}, {"null", TOKEN_NULL},
         {"let", TOKEN_LET}, {"const", TOKEN_CONST}, {"if", TOKEN_IF},
         {"else", TOKEN_ELSE}, {"while", TOKEN_WHILE}, {"for", TOKEN_FOR},
-        {"loop", TOKEN_LOOP}, {"break", TOKEN_BREAK}, {"continue", TOKEN_CONTINUE},
+        {"loop", TOKEN_LOOP}, {"in", TOKEN_IN}, {"break", TOKEN_BREAK}, {"continue", TOKEN_CONTINUE},
         {"return", TOKEN_RETURN}, {"func", TOKEN_FUNC}, {"class", TOKEN_CLASS},
         {"public", TOKEN_PUBLIC}, {"private", TOKEN_PRIVATE}, {"import", TOKEN_IMPORT},
         {"try", TOKEN_TRY}, {"catch", TOKEN_CATCH}, {"raise", TOKEN_RAISE},
@@ -127,7 +127,7 @@ void token_list_free(TokenList *tokens) {
 }
 
 const char *token_type_name(TokenType type) {
-    static const char *names[] = {"end of file", "error", "identifier", "number", "string", "char", "true", "false", "null", "let", "const", "if", "else", "while", "for", "loop", "break", "continue", "return", "func", "class", "public", "private", "import", "try", "catch", "raise", "fn", "and", "or", "not", "this", "super", "newline", "(", ")", "<", ">", "[", "]", "{", "}", ",", ":", ".", "=", "|>", ";"};
+    static const char *names[] = {"end of file", "error", "identifier", "number", "string", "char", "true", "false", "null", "let", "const", "if", "else", "while", "for", "in", "loop", "break", "continue", "return", "func", "class", "public", "private", "import", "try", "catch", "raise", "fn", "and", "or", "not", "this", "super", "newline", "(", ")", "<", ">", "[", "]", "{", "}", ",", ":", ".", "=", "|>", ";"};
     return type <= TOKEN_SEMICOLON ? names[type] : "unknown";
 }
 

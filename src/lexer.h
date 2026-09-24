@@ -19,6 +19,7 @@ typedef enum {
     TOKEN_ELSE,
     TOKEN_WHILE,
     TOKEN_FOR,
+    TOKEN_IN,
     TOKEN_LOOP,
     TOKEN_BREAK,
     TOKEN_CONTINUE,

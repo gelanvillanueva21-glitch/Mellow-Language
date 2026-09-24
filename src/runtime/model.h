@@ -17,19 +17,50 @@ typedef struct Function {
     size_t parameter_count;
     size_t body_start;
     size_t body_end;
+    TokenList *token_source;
+    struct Class *owner;
+    int is_private;
     struct Function *next;
 } Function;
+
+typedef struct Field {
+    char *name;
+    Value value;
+    struct Field *next;
+} Field;
+
+typedef struct Class {
+    char *name;
+    struct Class *parent;
+    Field *fields;
+    Function *methods;
+    struct Class *next;
+} Class;
+
+typedef struct Instance {
+    Class *class_info;
+    Field *fields;
+} Instance;
 
 typedef struct {
     TokenList *tokens;
     size_t current;
     Variable *variables;
     Function *functions;
+    Class *classes;
+    Instance *this_instance;
+    Class *active_class;
+    int importing_module;
+    char **import_names;
+    size_t import_name_count;
     int failed;
     int break_signal;
     int continue_signal;
     int return_signal;
     Value return_value;
+    TokenList **modules;
+    size_t module_count;
+    size_t module_capacity;
 } Runtime;
 
 #endif
