@@ -12,6 +12,7 @@ print<"Mellow MDAS expression result:">
 print<mdas<>>
 
 try [
+	print<"Hello World">
 	raise<"example error">
 ] catch<error> [
 	print<"Handled: ", error>
