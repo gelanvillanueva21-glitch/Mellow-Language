@@ -47,3 +47,17 @@ put<emptyDictionary, "answer", 42>
 if not<eq<get<emptyDictionary, "answer">, 42>> [
 	raise<"dictionary entries must be readable after insertion">
 ]
+
+let caughtValueError = false
+try [
+	raise<"expected value error">
+] catch<DivisionErr> [
+	raise<"wrong catch handler ran">
+] catch<error: ValueErr> [
+	set<caughtValueError, true>
+] catch<> [
+	raise<"later catch handler must not run">
+]
+if not<caughtValueError> [
+	raise<"matching catch handler did not run">
+]

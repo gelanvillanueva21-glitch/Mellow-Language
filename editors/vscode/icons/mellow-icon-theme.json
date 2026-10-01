@@ -1,0 +1,10 @@
+{
+  "iconDefinitions": {
+    "_mellow": {
+      "iconPath": "./mellow.svg"
+    }
+  },
+  "fileExtensions": {
+    "mll": "_mellow"
+  }
+}

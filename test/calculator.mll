@@ -79,6 +79,12 @@ func main<> [
         let calculator = Calculator<firstNumber, secondNumber>
         checkOperator<operator, calculator>
     ] 
+    catch <validationError> [
+        print<"Validation Error: {validationError}">
+    ] 
+    catch <conversionError> [
+        print<"Conversion Error: {conversionError}">
+    ] 
 
     catch <err> [
         print<"Error: {err}">

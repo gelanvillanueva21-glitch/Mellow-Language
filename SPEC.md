@@ -17,7 +17,7 @@ control       = "if" expression block [ "else" ( "if" expression block | block )
               | "while" expression block
               | "loop" block
               | "for" identifier "in" expression block
-              | "try" block "catch" "<" [ catch_spec ] ">" block
+              | "try" block catch_clause { catch_clause }
               | "break" | "continue"
               | "return" [ expression ] ;
 class_decl    = "class" identifier [ ":" identifier ] "["
@@ -26,6 +26,7 @@ field_decl    = "let" identifier [ "=" expression ] ;
 method_decl   = [ "private" ] "func" identifier "<" [ parameters ] ">" block ;
 import_stmt   = "import" string "<" [ identifier { "," identifier } ] ">" ;
 catch_spec    = identifier [ ":" error_type ] | error_type ;
+catch_clause  = "catch" "<" [ catch_spec ] ">" block ;
 error_type    = "ValueErr" | "RecurErr" | "DivisionErr" | "SyntaxErr" ;
 expression    = literal | identifier | call | collection | member_access ;
 call          = identifier "<" [ expression { "," expression } ] ">" ;
@@ -136,8 +137,9 @@ print<factorial<5>>
 
 ## Errors and strings
 
-Errors can be recovered with `try` and `catch`. Catch-all and typed forms are
-supported. A named catch variable receives the error message:
+Errors can be recovered with `try` and one or more consecutive `catch` clauses.
+Catch-all and typed forms are supported; only the first matching handler runs.
+A named catch variable receives the error message:
 
 ```mellow
 try [

@@ -291,8 +291,9 @@ Split a string into a list or join a string collection into one string.
 .NH 1
 9. Errors
 .PP
-try [ ... ] catch<error> [ ... ] catches runtime errors and binds the error
-message to the catch variable. \fBcatch<>\fP catches without binding;
+One .B try block may have multiple consecutive .B catch clauses. Only the first
+matching handler runs. A named catch variable receives the error message;
+\fBcatch<>\fP catches without binding;
 \fBcatch<DivisionErr>\fP filters by type; \fBcatch<error: DivisionErr>\fP
 filters and binds. Error types are \fBValueErr\fP, \fBRecurErr\fP,
 \fBDivisionErr\fP, and \fBSyntaxErr\fP. \fBraise<message>\fP creates a

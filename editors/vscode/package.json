@@ -30,6 +30,13 @@
         "scopeName": "source.mellow",
         "path": "./syntaxes/mellow.tmLanguage.json"
       }
+    ],
+    "iconThemes": [
+      {
+        "id": "mellow-file-icons",
+        "label": "Mellow File Icons",
+        "path": "./icons/mellow-icon-theme.json"
+      }
     ]
   }
 }

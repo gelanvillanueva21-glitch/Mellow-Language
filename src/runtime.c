@@ -910,39 +910,43 @@ static void execute_try(Runtime *runtime) {
     int caught = runtime->failed;
     ErrorType caught_type = runtime->error_type;
     char *message = duplicate_text(runtime->error_message ? runtime->error_message : "runtime error");
-    skip_lines(runtime);
-    if (!match(runtime, TOKEN_CATCH)) {
-        if (caught) error_at(runtime, "try requires catch after an error");
-        free(message); return;
-    }
-    skip_lines(runtime);
-    if (!match(runtime, TOKEN_LEFT_ANGLE)) { syntax_error_at(runtime, "catch expects <error-type> or <> "); free(message); return; }
-    Token *name = NULL;
-    ErrorType expected_type = ERROR_VALUE;
-    int typed = 0;
-    if (peek(runtime)->type == TOKEN_IDENTIFIER) {
-        Token *first = advance(runtime);
-        if (match(runtime, TOKEN_COLON)) {
-            name = first;
-            Token *type_name = peek(runtime);
-            if (!match(runtime, TOKEN_IDENTIFIER) || !parse_error_type(type_name->lexeme, &expected_type)) {
-                syntax_error_at(runtime, "catch expects ValueErr, RecurErr, DivisionErr, or SyntaxErr");
-                free(message); return;
-            }
-            typed = 1;
-        } else if (parse_error_type(first->lexeme, &expected_type)) typed = 1;
-        else name = first;
-    }
-    if (!match(runtime, TOKEN_RIGHT_ANGLE)) { syntax_error_at(runtime, "catch expects > after error type"); free(message); return; }
-    skip_lines(runtime);
-    if (caught && (!typed || expected_type == caught_type)) {
-        runtime->failed = 0;
-        runtime->exception_raised = 0;
-        if (name) {
-            Value error = string_value(message); set_variable(runtime, name->lexeme, error, 0); free_value(&error);
+    int has_catch = 0;
+    int handler_executed = 0;
+    while (1) {
+        skip_lines(runtime);
+        if (!match(runtime, TOKEN_CATCH)) break;
+        has_catch = 1;
+        skip_lines(runtime);
+        if (!match(runtime, TOKEN_LEFT_ANGLE)) { syntax_error_at(runtime, "catch expects <error-type> or <> "); free(message); return; }
+        Token *name = NULL;
+        ErrorType expected_type = ERROR_VALUE;
+        int typed = 0;
+        if (peek(runtime)->type == TOKEN_IDENTIFIER) {
+            Token *first = advance(runtime);
+            if (match(runtime, TOKEN_COLON)) {
+                name = first;
+                Token *type_name = peek(runtime);
+                if (!match(runtime, TOKEN_IDENTIFIER) || !parse_error_type(type_name->lexeme, &expected_type)) {
+                    syntax_error_at(runtime, "catch expects ValueErr, RecurErr, DivisionErr, or SyntaxErr");
+                    free(message); return;
+                }
+                typed = 1;
+            } else if (parse_error_type(first->lexeme, &expected_type)) typed = 1;
+            else name = first;
         }
-        execute_block(runtime);
-    } else skip_block(runtime);
+        if (!match(runtime, TOKEN_RIGHT_ANGLE)) { syntax_error_at(runtime, "catch expects > after error type"); free(message); return; }
+        skip_lines(runtime);
+        if (caught && !handler_executed && (!typed || expected_type == caught_type)) {
+            runtime->failed = 0;
+            runtime->exception_raised = 0;
+            if (name) {
+                Value error = string_value(message); set_variable(runtime, name->lexeme, error, 0); free_value(&error);
+            }
+            handler_executed = 1;
+            execute_block(runtime);
+        } else skip_block(runtime);
+    }
+    if (caught && !has_catch) error_at(runtime, "try requires catch after an error");
     free(message);
 }
 static void execute_for(Runtime *runtime) {
