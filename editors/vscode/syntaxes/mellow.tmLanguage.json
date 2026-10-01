@@ -1,0 +1,135 @@
+{
+  "scopeName": "source.mellow",
+  "name": "Mellow",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#function-declaration" },
+    { "include": "#class-declaration" },
+    { "include": "#error-types" },
+    { "include": "#constants" },
+    { "include": "#builtins" },
+    { "include": "#keywords" },
+    { "include": "#calls" },
+    { "include": "#numbers" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.mellow",
+          "begin": "//",
+          "end": "$"
+        },
+        {
+          "name": "comment.block.mellow",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.mellow",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.mellow",
+              "match": "\\\\."
+            },
+            {
+              "name": "variable.interpolation.mellow",
+              "match": "\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.mellow",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.mellow",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "function-declaration": {
+      "name": "meta.function.mellow",
+      "match": "\\b(func)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.function.mellow" },
+        "2": { "name": "entity.name.function.mellow" }
+      }
+    },
+    "class-declaration": {
+      "name": "meta.class.mellow",
+      "match": "\\b(class)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.class.mellow" },
+        "2": { "name": "entity.name.type.class.mellow" }
+      }
+    },
+    "error-types": {
+      "name": "support.type.exception.mellow",
+      "match": "\\b(ValueErr|RecurErr|DivisionErr|SyntaxErr)\\b"
+    },
+    "constants": {
+      "name": "constant.language.mellow",
+      "match": "\\b(true|false|null)\\b"
+    },
+    "builtins": {
+      "name": "support.function.builtin.mellow",
+      "match": "\\b(abs|add|and|calculate_expression|ceil|clamp|contains|dec|destroy|dict|div|ends_with|eq|equal|evaluate|floor|get|greater|greater_equal|gt|gte|has|inc|inside|input|is_array|is_dict|is_list|is_null|is_number|is_string|join|len|less|less_equal|list|lower|lt|lte|max|min|mod|mul|neq|not|not_equal|or|pow|print|raise|range|replace|round|set|split|sqrt|starts_with|sub|to_bool|to_float|to_int|to_number|to_string|trim|type|upper)\\b(?=\\s*<)"
+    },
+    "keywords": {
+      "name": "keyword.control.mellow",
+      "match": "\\b(break|catch|class|const|continue|else|for|func|if|import|in|let|loop|private|public|return|super|this|try|while)\\b"
+    },
+    "calls": {
+      "name": "entity.name.function.call.mellow",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*<)"
+    },
+    "numbers": {
+      "name": "constant.numeric.mellow",
+      "match": "\\b\\d+(?:\\.\\d+)?\\b"
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.section.block.begin.mellow",
+          "match": "\\["
+        },
+        {
+          "name": "punctuation.section.block.end.mellow",
+          "match": "\\]"
+        },
+        {
+          "name": "punctuation.section.collection.mellow",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.separator.mellow",
+          "match": "[,;:]"
+        },
+        {
+          "name": "keyword.operator.assignment.mellow",
+          "match": "="
+        },
+        {
+          "name": "punctuation.accessor.mellow",
+          "match": "\\."
+        },
+        {
+          "name": "punctuation.section.arguments.mellow",
+          "match": "[<>]"
+        }
+      ]
+    }
+  }
+}

@@ -35,3 +35,15 @@ set<firstNumber, "forty-two">
 if not<is_string<firstNumber>> [
 	raise<"variable must accept a different value type">
 ]
+
+let emptyDictionary = dict<>
+if not<is_dict<emptyDictionary>> [
+	raise<"dict<> must create an empty dictionary">
+]
+if not<eq<len<emptyDictionary>, 0>> [
+	raise<"a new dictionary must be empty">
+]
+put<emptyDictionary, "answer", 42>
+if not<eq<get<emptyDictionary, "answer">, 42>> [
+	raise<"dictionary entries must be readable after insertion">
+]

@@ -66,20 +66,22 @@ func checkOperator<operator, calculator> [
 ]
 
 
-try [
-    let firstNumber = to_number<input<"Enter First number: ">>
-    let secondNumber = to_number<input<"Enter Second Number: ">>
+func main<> [
+    try [
+        let firstNumber = to_number<input<"Enter First number: ">>
+        let secondNumber = to_number<input<"Enter Second Number: ">>
 
-    let operator = input<"Enter Operator[+, -, *, /, %]: ">
-    if not<inside<operator, {"+", "-", "*", "/", "%"}>> [
-        raise<"Must input an operator">
+        let operator = input<"Enter Operator[+, -, *, /, %]: ">
+        if not<inside<operator, {"+", "-", "*", "/", "%"}>> [
+            raise<"Must input an operator">
+        ]
+
+        let calculator = Calculator<firstNumber, secondNumber>
+        checkOperator<operator, calculator>
+    ] 
+
+    catch <err> [
+        print<"Error: {err}">
     ]
 
-    let calculator = Calculator<firstNumber, secondNumber>
-    checkOperator<operator, calculator>
-] 
-
-catch <err> [
-    print<"Error: {err}">
 ]
-

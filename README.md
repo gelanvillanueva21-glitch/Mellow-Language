@@ -20,21 +20,17 @@ make
 ```
 
 The lexer supports identifiers, numbers, strings, chars, keywords, comments,
-newlines, call delimiters, block delimiters, collection punctuation, assignment,
-and pipelines. The runtime currently supports literals, `let` and `const`,
-variables, nested angle-bracket calls, `print`, `add`, `sub`, `mul`, `div`,
-`mod`, `pow`, `sqrt`, `inc`, `dec`, all named comparisons and logical
-functions, `len`, `type`, `to_string`, `raise`, arrays, lists, `if`, `else`,
-`while`, `loop`, `break`, `continue`, named functions, recursion, `return`,
-and string interpolation. `--tokens` remains available as a development
-diagnostic mode, and `--repl` starts an interactive session.
+newlines, call delimiters, block delimiters, collection punctuation, and
+assignment. The runtime supports dynamic values, optionally initialized
+variables and fields, named functions, classes, arrays, lists, dictionaries,
+loops, imports, typed `try`/`catch`, and automatic `main<>` execution. Calls use
+angle brackets, blocks use square brackets, and arithmetic/comparison use named
+builtins. `--tokens` remains available as a development diagnostic mode, and
+`--repl` starts an interactive session.
 
-The remaining production-grade layers are dictionaries and indexing, default
-parameters, lambdas/closures, `for` iteration, structured `try/catch`, modules,
-and the object system with inheritance and dynamic dispatch. They require the
-runtime to move from the current direct evaluator to an AST and scoped object
-model; the current implementation keeps its behavior testable while that
-larger transition is built.
+Current limitations include indexing syntax, default parameters, anonymous
+functions, closures, static members, and automatic garbage collection. See
+[SPEC.md](SPEC.md) for the implemented grammar and semantics.
 
 ## Design decisions
 
@@ -42,9 +38,10 @@ Mellow uses dynamic runtime values with optional type annotations planned for a
 later static-checking pass. This keeps closures, modules, and dynamic dispatch
 straightforward in the first interpreter.
 
-Because arrays and lists cannot be distinguished from identical `{...}` syntax,
-the grammar uses `{1, 2, 3}` for arrays and `list<1, 2, 3>` for lists. A mapping
-literal is recognized by its colon pairs, for example `{"name": "Alice"}`.
+Arrays use `{1, 2, 3}`, lists use `list<1, 2, 3>`, and non-empty dictionaries
+use string-keyed colon pairs such as `{"name": "Alice"}`. Empty `{}` is an
+array; `dict<>` creates an empty dictionary. Use `get`, `has`, and `put` to
+access and mutate dictionary entries.
 
 The current execution pipeline is:
 
@@ -129,7 +126,5 @@ let amount = to_number<raw>
 print<add<amount, 10>>
 ```
 
-See [SPEC.md](SPEC.md) for the grammar and semantics. The next architectural
-step is replacing the direct evaluator with an explicit AST and scoped object
-model for dictionaries, indexing, closures, classes, modules, and structured
-exception recovery.
+See [SPEC.md](SPEC.md) for the grammar and semantics. An explicit AST and
+lexical-scope model are possible future architecture improvements.

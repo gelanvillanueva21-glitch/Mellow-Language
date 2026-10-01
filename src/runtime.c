@@ -270,6 +270,7 @@ static Value string_join(Value list, const char *delimiter) {
     Value value = string_value(result); free(result); return value;
 }
 static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, size_t count) {
+    if (strcmp(name, "dict") == 0 && count == 0) return dictionary_value();
     if (strcmp(name, "input") == 0 && (count == 0 || (count == 1 && arguments[0].type == VALUE_STRING))) {
         if (count == 1) { fputs(arguments[0].string, stdout); fflush(stdout); }
         char buffer[4096];
@@ -399,13 +400,14 @@ static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, 
         dictionary_set(&arguments[0], arguments[1].string, arguments[2]);
         return null_value();
     }
-    if ((strcmp(name, "is_null") == 0 || strcmp(name, "is_number") == 0 || strcmp(name, "is_string") == 0 || strcmp(name, "is_array") == 0 || strcmp(name, "is_list") == 0) && count == 1) {
+    if ((strcmp(name, "is_null") == 0 || strcmp(name, "is_number") == 0 || strcmp(name, "is_string") == 0 || strcmp(name, "is_array") == 0 || strcmp(name, "is_list") == 0 || strcmp(name, "is_dict") == 0) && count == 1) {
         ValueType type = arguments[0].type;
         if (strcmp(name, "is_null") == 0) return bool_value(type == VALUE_NULL);
         if (strcmp(name, "is_number") == 0) return bool_value(type == VALUE_NUMBER);
         if (strcmp(name, "is_string") == 0) return bool_value(type == VALUE_STRING);
         if (strcmp(name, "is_array") == 0) return bool_value(type == VALUE_ARRAY);
-        return bool_value(type == VALUE_LIST);
+        if (strcmp(name, "is_list") == 0) return bool_value(type == VALUE_LIST);
+        return bool_value(type == VALUE_DICT);
     }
     if ((strcmp(name, "abs") == 0 || strcmp(name, "floor") == 0 || strcmp(name, "ceil") == 0 || strcmp(name, "round") == 0) && count == 1) {
         if (arguments[0].type != VALUE_NUMBER) { error_at(runtime, "numeric builtin expects a number"); return null_value(); }
@@ -422,13 +424,14 @@ static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, 
         if (arguments[0].type != VALUE_NUMBER || arguments[1].type != VALUE_NUMBER || arguments[2].type != VALUE_NUMBER) { error_at(runtime, "clamp expects numbers"); return null_value(); }
         return number_value(fmin(fmax(arguments[0].number, arguments[1].number), arguments[2].number));
     }
-    if ((strcmp(name, "is_null") == 0 || strcmp(name, "is_number") == 0 || strcmp(name, "is_string") == 0 || strcmp(name, "is_array") == 0 || strcmp(name, "is_list") == 0) && count == 1) {
+    if ((strcmp(name, "is_null") == 0 || strcmp(name, "is_number") == 0 || strcmp(name, "is_string") == 0 || strcmp(name, "is_array") == 0 || strcmp(name, "is_list") == 0 || strcmp(name, "is_dict") == 0) && count == 1) {
         ValueType type = arguments[0].type;
         if (strcmp(name, "is_null") == 0) return bool_value(type == VALUE_NULL);
         if (strcmp(name, "is_number") == 0) return bool_value(type == VALUE_NUMBER);
         if (strcmp(name, "is_string") == 0) return bool_value(type == VALUE_STRING);
         if (strcmp(name, "is_array") == 0) return bool_value(type == VALUE_ARRAY);
-        return bool_value(type == VALUE_LIST);
+        if (strcmp(name, "is_list") == 0) return bool_value(type == VALUE_LIST);
+        return bool_value(type == VALUE_DICT);
     }
     if ((strcmp(name, "inside") == 0 || strcmp(name, "contains") == 0) && count == 2) {
         Value needle = arguments[0];

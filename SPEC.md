@@ -1,44 +1,59 @@
 # Mellow Language Specification
 
-This document describes the implemented Mellow core and the reserved syntax for
-the planned production layers.
+This document describes the syntax and behavior implemented by the current
+Mellow interpreter.
 
 ## Lexical grammar
 
 ```ebnf
 program       = { statement } ;
-statement     = declaration | control | expression [ ";" ] ;
-declaration   = ( "let" | "const" ) identifier "=" expression
+statement     = declaration | control | class_decl | import_stmt
+              | expression [ ";" ] ;
+declaration   = ( "let" | "const" ) identifier [ "=" expression ]
               | "func" identifier "<" [ parameters ] ">" block ;
 parameters    = identifier { "," identifier } ;
 block         = "[" { statement } "]" ;
 control       = "if" expression block [ "else" ( "if" expression block | block ) ]
               | "while" expression block
               | "loop" block
+              | "for" identifier "in" expression block
+              | "try" block "catch" "<" [ catch_spec ] ">" block
               | "break" | "continue"
               | "return" [ expression ] ;
-expression    = literal | identifier | call | array ;
+class_decl    = "class" identifier [ ":" identifier ] "["
+                { field_decl | method_decl } "]" ;
+field_decl    = "let" identifier [ "=" expression ] ;
+method_decl   = [ "private" ] "func" identifier "<" [ parameters ] ">" block ;
+import_stmt   = "import" string "<" [ identifier { "," identifier } ] ">" ;
+catch_spec    = identifier [ ":" error_type ] | error_type ;
+error_type    = "ValueErr" | "RecurErr" | "DivisionErr" | "SyntaxErr" ;
+expression    = literal | identifier | call | collection | member_access ;
 call          = identifier "<" [ expression { "," expression } ] ">" ;
-array         = "{" [ expression { "," expression } ] "}" ;
+member_access = identifier "." identifier [ "<" [ arguments ] ">" ] ;
+arguments     = expression { "," expression } ;
+collection    = "{" [ expression { "," expression } ] "}" ;
 literal       = number | string | character | "true" | "false" | "null" ;
 ```
 
-Whitespace and comments are ignored. Newlines are statement separators outside
-calls and blocks, and are permitted anywhere inside calls and collection
-literals. `+`, `-`, `*`, `/`, `%`, and comparison operators are not language
-operators; named builtins provide those operations.
+Newlines and semicolons separate statements. Newlines are permitted between
+call arguments and inside collection literals. An `else` or `catch` belongs to
+the immediately preceding block; blank lines are allowed, but another statement
+cannot intervene. `+`, `-`, `*`, `/`, `%`, and comparison operators are not
+language operators; named builtins provide those operations.
 
 ## Values and semantics
 
-Mellow currently uses dynamic values: `null`, numbers, strings, booleans,
-arrays, lists, and functions. `let` binds a mutable variable. `const` binds a
-name that cannot be reassigned or passed to `set`. Variables are resolved in
-the current function environment. Functions are first-class at the runtime
-boundary and named functions support recursion.
+Mellow uses dynamic values: `null`, numbers, strings, booleans, arrays, lists,
+dictionaries, and class instances. `let name` initializes a mutable variable to
+`null`; `let name = expression` initializes it to that expression's value.
+Variables can later hold values of any type. `const` accepts the same optional
+initializer but cannot be reassigned. `set<name, value>` assigns a new value to
+a mutable variable. Class fields follow the same `let` rules. Named functions
+support recursion.
 
-Arrays use `{1, 2, 3}`. Lists use `list<1, 2, 3>`. Dictionaries are reserved
-for the next collection layer because `{key: value}` needs a distinct value
-representation and indexing semantics.
+Arrays use `{1, 2, 3}` and lists use `list<1, 2, 3>`. A non-empty dictionary
+literal uses string keys and colons, for example `{"name": "Ada"}`. Empty
+braces `{}` mean an empty array; use `dict<>` for an empty dictionary.
 
 ## Builtins
 
@@ -50,11 +65,14 @@ and `dec` operate on numbers; `add` also concatenates strings and same-kind
 collections. `eq`, `neq`, `lt`, `gt`, `lte`, and `gte` return booleans.
 `and`, `or`, and `not` combine booleans. `abs`, `min`, `max`, `clamp`, `floor`,
 `ceil`, and `round` provide common numeric helpers. `is_null`, `is_number`,
-`is_string`, `is_array`, and `is_list` return type predicates. `len`, `type`, and `to_string` inspect
-values. `inside<value, container>` returns only a boolean and checks whether a
-string is contained in a string, or a value is equal to an item in an array or
-list. `contains` is an alias. `set<name, value>` mutates a variable. `raise<message>` reports a
-runtime exception and exits with a nonzero status.
+`is_string`, `is_array`, `is_list`, and `is_dict` return type predicates. `len`,
+`type`, and `to_string` inspect values. `get<container, key>` reads a dictionary
+entry or collection index; `has<container, key>` tests for an entry or index;
+`put<dictionary, key, value>` adds or replaces a dictionary entry. Dictionary
+keys must be strings. `dict<>` creates an empty dictionary. `inside` and its
+alias `contains` test strings, arrays, lists, or dictionary keys.
+`set<name, value>` mutates a variable. `raise<message>` reports a runtime
+exception and exits with a nonzero status unless caught.
 
 `input<>` reads one line from the terminal and returns it as a string.
 `input<"Prompt: ">` prints a prompt first. `to_number` and `to_float` parse
@@ -118,8 +136,8 @@ print<factorial<5>>
 
 ## Errors and strings
 
-Errors can be recovered with `try` and `catch`. The catch variable receives the
-error message:
+Errors can be recovered with `try` and `catch`. Catch-all and typed forms are
+supported. A named catch variable receives the error message:
 
 ```mellow
 try [
@@ -128,6 +146,11 @@ try [
     print<"Handled: ", error>
 ]
 ```
+
+Use `catch<>` for an unbound catch-all, `catch<DivisionErr>` to handle only a
+particular error type, or `catch<error: DivisionErr>` to filter and bind the
+message. Available types are `ValueErr`, `RecurErr`, `DivisionErr`, and
+`SyntaxErr`.
 
 String helpers include `trim`, `upper`, `lower`, `replace`, `starts_with`,
 `ends_with`, `split`, and `join`:
@@ -140,8 +163,9 @@ print<join<words, "-">>
 
 ## Object-oriented programming
 
-Classes use square-bracket bodies. Fields are declared with `let`, constructors
-use `init`, and methods use the same angle-bracket call syntax as functions.
+Classes use square-bracket bodies. Fields are declared with `let` and start as
+`null` when no initializer is provided. Constructors use `init`, and methods
+use the same angle-bracket call syntax as functions.
 
 ```mellow
 class Person [
@@ -158,8 +182,14 @@ Single inheritance, inherited fields, dynamic method lookup, overriding, and
 parent calls through `super.method<>` are supported. `destroy<instance>` calls
 an optional `free<>` method before releasing the instance.
 
-## Reserved production syntax
+## Program entry point
 
-The lexer reserves `public`, `private`, `import`, `try`, and `catch`. Visibility
-modifiers, static members, modules, structured exception recovery, and automatic
-garbage collection are not yet executable.
+If a top-level `func main<> [...]` exists, declarations and imports are
+collected first and `main<>` is called automatically. Other top-level
+executable statements are skipped in this mode. Without `main`, statements run
+from top to bottom.
+
+## Current limitations
+
+Indexing syntax, default parameters, anonymous functions, closures, static
+members, and automatic garbage collection are not yet implemented.

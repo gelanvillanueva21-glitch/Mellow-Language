@@ -14,9 +14,8 @@ calls use angle brackets, code blocks use square brackets, and curly braces are
 used for array data. Arithmetic and comparison are expressed with named
 built-in functions rather than operators.
 .PP
-This reference describes the current executable core. Keywords marked
-"reserved" are recognized by the lexer but are not yet executable in the
-interpreter.
+This reference describes the current executable core. The limitations section
+lists features that are not yet implemented.
 .NH 1
 2. Basic Syntax
 .PP
@@ -37,39 +36,40 @@ if gt<score, 10> [
 Comments use // for one line and /* ... */ for multiple lines. Newlines may be
 used between arguments and delimiters in calls and collection literals.
 .NH 1
-\fBcontains\fP is an alias for .B inside.
+3. Values and Variables
 .TP
 .B null
 The absence of a value. The literal is .B null.
 .TP
 .B number
-.B abs<a>
-Common numeric helpers. .B min and .B max select a number; .B clamp limits a
-value to a range. .B abs returns magnitude.
-values. Examples: .B 42 and .B 3.14159.
+Numeric values such as .B 42 and .B 3.14159.
 .TP
 .B string
-.B is_null<a>
-The related predicates .B is_number, .B is_string, .B is_array, and .B is_list
-Text enclosed in double quotes. Example: .B "hello".
+Text enclosed in double quotes, such as .B "hello".
 .TP
 .B char
-A single character enclosed in single quotes. Character values currently use
-the same string representation at runtime.
+A single character enclosed in single quotes. Character values use the same
+string representation at runtime.
 .TP
 .B bool
 The boolean literals .B true and .B false.
 .TP
 .B array
-An ordered collection written with curly braces. Example: .B {1, 2, 3}.
+An ordered collection written with curly braces, such as \fB{1, 2, 3}\fP. Empty
+\fB{}\fP is an empty array.
 .TP
 .B list
-An ordered dynamic collection created with .B list<...>. Example:
-\fBlist<"red", "green", "blue">\fP.
+An ordered collection created with .B list<...>.
+.TP
+.B dictionary
+A string-keyed mapping written with colon pairs, such as
+\fB{"name": "Ada"}\fP. Use .B dict<> for an empty dictionary.
 .PP
-\fBlet\fP defines a mutable variable:
+\fBlet\fP defines a mutable variable. Without an initializer it starts as
+.B null:
 .DS
 let name = "Mellow"
+let unset
 set<name, "Mellow Language">
 .DE
 .PP
@@ -91,10 +91,10 @@ Creates the boolean value false.
 Creates the null value.
 .TP
 .B let
-Declares a mutable variable using .B let name = expression.
+Declares a mutable variable using .B let name or .B let name = expression.
 .TP
 .B const
-Declares an immutable variable using .B const name = expression.
+Declares an immutable variable using .B const name or .B const name = expression.
 .TP
 .B if
 Executes a block when an expression is truthy. Truthy values are true,
@@ -228,7 +228,8 @@ Returns the boolean negation of a.
 .B inside<value, container>
 Returns only a boolean. For strings, it checks whether the first string occurs
 inside the second. For arrays and lists, it checks whether an equal item exists.
-contains is an alias for inside.
+For dictionaries, it checks whether the string key exists. .B contains is an
+alias for .B inside.
 .NH 1
 7. Collection and Conversion Builtins
 .TP
@@ -236,11 +237,12 @@ contains is an alias for inside.
 Creates a list from zero or more values.
 .TP
 .B len<value>
-Returns the character count of a string or the item count of an array/list.
+Returns the character count of a string or the item count of an array, list, or
+dictionary.
 .TP
 .B type<value>
 Returns a string naming the runtime type: null, number, string, bool, array,
-or list.
+list, dictionary, or instance.
 .TP
 .B to_string<value>
 Converts primitive values to text. Collections currently return a collection
@@ -253,9 +255,10 @@ Prints each argument separated by a space, followed by a newline.
 Replaces the value of a mutable variable. The first argument is a variable name,
 not an evaluated expression.
 .TP
-get<container, key>, has<container, key>, put<dictionary, key, value>
+dict<>, get<container, key>, has<container, key>, put<dictionary, key, value>
 Read a dictionary key or collection index, test whether it exists, or add and
-replace a dictionary entry.
+replace a dictionary entry. .B dict<> creates an empty dictionary, .B get
+returns .B null for a missing key, and dictionary keys must be strings.
 .TP
 .B range<start, end, step>
 Creates a numeric list with an exclusive end. The step is optional and defaults
@@ -289,7 +292,11 @@ Split a string into a list or join a string collection into one string.
 9. Errors
 .PP
 try [ ... ] catch<error> [ ... ] catches runtime errors and binds the error
-message to the catch variable. .B raise<message> creates a runtime error.
+message to the catch variable. \fBcatch<>\fP catches without binding;
+\fBcatch<DivisionErr>\fP filters by type; \fBcatch<error: DivisionErr>\fP
+filters and binds. Error types are \fBValueErr\fP, \fBRecurErr\fP,
+\fBDivisionErr\fP, and \fBSyntaxErr\fP. \fBraise<message>\fP creates a
+runtime error.
 .TP
 .B input<> or input<"prompt">
 Reads one terminal line as a string. An optional string prompt is printed before
@@ -308,7 +315,7 @@ clamp limits a value to a range.
 .B floor<a>, ceil<a>, round<a>
 Return the corresponding rounded numeric value.
 .TP
-is_null<a>, is_number<a>, is_string<a>, is_array<a>, is_list<a>
+is_null<a>, is_number<a>, is_string<a>, is_array<a>, is_list<a>, is_dict<a>
 Return a boolean indicating whether a value has the requested runtime type.
 .NH 1
 9. Modules and Imports
@@ -360,8 +367,9 @@ print<factorial<5>>
 .NH 1
 10. Object-Oriented Programming
 .PP
-Classes use square-bracket bodies. Fields use .B let, constructors use the
-method name .B init, and methods use angle-bracket calls.
+Classes use square-bracket bodies. Fields use .B let and default to .B null
+without an initializer. Constructors use the method name .B init, and methods
+use angle-bracket calls.
 .DS
 class Person [
     let name = ""
@@ -381,40 +389,32 @@ dynamic method lookup, overriding, and parent calls through .B super.method<>
 are supported. .B destroy<instance> calls an optional .B free<> method before
 releasing the instance.
 .PP
-Visibility modifiers, static members, automatic garbage collection, and
-structured access control are reserved for later runtime layers.
+Visibility modifiers, static members, and automatic garbage collection are
+reserved for later runtime layers.
 .NH 1
 11. Command-Line Tools
 .TP
 .B make
-Builds the interpreter. Run it from the project root.
+Builds the interpreter from the project root.
 .TP
 .B ./mellow file.mll
 Executes a Mellow source file.
 .TP
 .B ./mellow --tokens file.mll
-Prints the lexer token stream with source locations.
+Prints the token stream with source locations.
 .TP
 .B ./mellow --repl
-Starts the interactive read-evaluate-print loop. Type .B exit to leave it.
+Starts the interactive REPL. Type .B exit to leave it.
 .NH 1
-12. Reserved Keywords
+12. Program Entry Point
 .PP
-The following words are lexed and reserved for the next runtime layers:
-\fBfor\fP, \fBpublic\fP, \fBprivate\fP, \fBimport\fP, \fBtry\fP, \fBcatch\fP,
-\fBfn\fP, and.
-.PP
-.B for
-is reserved for collection iteration. .B public and .B private are reserved
-for access control. .B import is reserved for modules. .B try and .B catch are reserved
-for structured error recovery. .B fn is reserved for anonymous functions and
-closures. These features are
-specified in the project roadmap but are not executable in the current core.
+If a top-level .B func main<> [...] exists, declarations and imports are
+collected and .B main<> runs automatically. Other top-level executable
+statements are skipped in this mode. Without .B main, the program executes
+top-to-bottom.
 .NH 1
 13. Current Limitations
 .PP
-Dictionaries, indexing, default parameters, lambdas, closures, structured
-try/catch recovery, modules, visibility, static members, and garbage collection are
-not yet implemented. The lexer recognizes much of their vocabulary so these
-features can be added without changing the central call and block syntax.
+Indexing syntax, default parameters, lambdas, closures, static members, and
+automatic garbage collection are not yet implemented.
 .bp

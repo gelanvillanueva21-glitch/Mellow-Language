@@ -1,0 +1,35 @@
+{
+  "name": "mellow-language",
+  "displayName": "Mellow Language Support",
+  "description": "Syntax highlighting and editor support for Mellow .mll files.",
+  "version": "0.1.0",
+  "publisher": "mellow-language",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "mellow",
+        "aliases": [
+          "Mellow",
+          "mll"
+        ],
+        "extensions": [
+          ".mll"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "mellow",
+        "scopeName": "source.mellow",
+        "path": "./syntaxes/mellow.tmLanguage.json"
+      }
+    ]
+  }
+}
