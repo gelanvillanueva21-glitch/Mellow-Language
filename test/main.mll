@@ -22,3 +22,16 @@ let phrase = "  mellow language  "
 print<upper<trim<phrase>>>
 print<replace<trim<phrase>, "language", "runtime">>
 print<join<split<trim<phrase>, " ">, "-">>
+
+let firstNumber
+if not<is_null<firstNumber>> [
+	raise<"bare let must initialize to null">
+]
+set<firstNumber, 42>
+if not<is_number<firstNumber>> [
+	raise<"variable must accept a number after declaration">
+]
+set<firstNumber, "forty-two">
+if not<is_string<firstNumber>> [
+	raise<"variable must accept a different value type">
+]

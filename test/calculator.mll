@@ -1,8 +1,8 @@
 
 
 class Calculator [
-    let firstNumber = 0
-    let secondNumber = 0
+    let firstNumber
+    let secondNumber
 
     func init <
         firstNumber, 
@@ -42,16 +42,24 @@ func checkOperator<operator, calculator> [
     if eq<operator, "+"> [
         let result = calculator.getSum<>
         print<"Sum: {result}">
-    ] else if eq<operator, "-"> [
+    ] 
+    
+    else if eq<operator, "-"> [
         let result = calculator.getDifference<>
         print<"Difference: {result}">
-    ] else if eq<operator, "*"> [
+    ] 
+    
+    else if eq<operator, "*"> [
         let result = calculator.getProduct<>
         print<"Product: {result}">
-    ] else if eq<operator, "/"> [
+    ] 
+    
+    else if eq<operator, "/"> [
         let result = calculator.getQuotient<>
         print<"Quotient: {result}">
-    ] else [
+    ] 
+    
+    else [
         let result = calculator.getModulos<>
         print<"Modulos: {result}">
     ]
@@ -69,7 +77,9 @@ try [
 
     let calculator = Calculator<firstNumber, secondNumber>
     checkOperator<operator, calculator>
-] catch <err> [
+] 
+
+catch <err> [
     print<"Error: {err}">
 ]
 

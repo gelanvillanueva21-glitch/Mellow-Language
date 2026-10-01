@@ -49,17 +49,37 @@ static Value interpolated_string(Runtime *runtime, const char *text) {
 static Token *peek(Runtime *runtime) { return &runtime->tokens->items[runtime->current]; }
 static Token *advance(Runtime *runtime) { return &runtime->tokens->items[runtime->current++]; }
 static int match(Runtime *runtime, TokenType type) { if (peek(runtime)->type != type) return 0; advance(runtime); return 1; }
-static void error_at(Runtime *runtime, const char *message) {
+static void report_error(Runtime *runtime, const char *message, ErrorType type) {
     Token *token = peek(runtime);
     fprintf(stderr, "Mellow error at %d:%d: %s\n", token->line, token->column, message);
     free(runtime->error_message);
     runtime->error_message = duplicate_text(message);
+    runtime->error_type = type;
     runtime->failed = 1;
 }
+static void error_at(Runtime *runtime, const char *message) { report_error(runtime, message, ERROR_VALUE); }
+static void syntax_error_at(Runtime *runtime, const char *message) { report_error(runtime, message, ERROR_SYNTAX); }
 static void error_message(Runtime *runtime, const char *message) {
     free(runtime->error_message);
     runtime->error_message = duplicate_text(message);
+    runtime->error_type = ERROR_VALUE;
     runtime->failed = 1;
+}
+static const char *error_type_name(ErrorType type) {
+    switch (type) {
+        case ERROR_RECURSION: return "RecurErr";
+        case ERROR_DIVISION: return "DivisionErr";
+        case ERROR_SYNTAX: return "SyntaxErr";
+        default: return "ValueErr";
+    }
+}
+static int parse_error_type(const char *name, ErrorType *type) {
+    if (strcmp(name, "ValueErr") == 0) *type = ERROR_VALUE;
+    else if (strcmp(name, "RecurErr") == 0) *type = ERROR_RECURSION;
+    else if (strcmp(name, "DivisionErr") == 0) *type = ERROR_DIVISION;
+    else if (strcmp(name, "SyntaxErr") == 0) *type = ERROR_SYNTAX;
+    else return 0;
+    return 1;
 }
 static Variable *find_variable(Runtime *runtime, const char *name) {
     for (Variable *variable = runtime->variables; variable; variable = variable->next)
@@ -164,12 +184,12 @@ static size_t parse_arguments(Runtime *runtime, Value *arguments) {
     if (!match(runtime, TOKEN_RIGHT_ANGLE)) {
         do {
             skip_lines(runtime);
-            if (count == 32) { error_at(runtime, "too many arguments"); break; }
+            if (count == 32) { syntax_error_at(runtime, "too many arguments"); break; }
             arguments[count++] = expression(runtime);
             skip_lines(runtime);
         } while (match(runtime, TOKEN_COMMA));
         skip_lines(runtime);
-        if (!match(runtime, TOKEN_RIGHT_ANGLE)) error_at(runtime, "expected > after call arguments");
+        if (!match(runtime, TOKEN_RIGHT_ANGLE)) syntax_error_at(runtime, "expected > after call arguments");
     }
     return count;
 }
@@ -323,7 +343,7 @@ static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, 
         if (strcmp(name, "mul") == 0) return number_value(arguments[0].number * arguments[1].number);
         if (strcmp(name, "mod") == 0) return number_value(fmod(arguments[0].number, arguments[1].number));
         if (strcmp(name, "pow") == 0) return number_value(pow(arguments[0].number, arguments[1].number));
-        if (arguments[1].number == 0) { error_at(runtime, "division by zero"); return null_value(); }
+        if (arguments[1].number == 0) { report_error(runtime, "division by zero", ERROR_DIVISION); return null_value(); }
         return number_value(arguments[0].number / arguments[1].number);
     }
     if (strcmp(name, "sqrt") == 0 && count == 1 && arguments[0].type == VALUE_NUMBER) return number_value(sqrt(arguments[0].number));
@@ -616,7 +636,7 @@ static Value expression(Runtime *runtime) {
         if (!variable) { error_at(runtime, "unknown variable"); return null_value(); }
         return copy_value(variable->value);
     }
-    error_at(runtime, "expected an expression"); return null_value();
+    syntax_error_at(runtime, "expected an expression"); return null_value();
 }
 
 static int truthy(Value value) {
@@ -628,7 +648,7 @@ static int truthy(Value value) {
     return value.collection->count != 0;
 }
 static void skip_block(Runtime *runtime) {
-    if (!match(runtime, TOKEN_LEFT_BRACKET)) { error_at(runtime, "expected [ to begin block"); return; }
+    if (!match(runtime, TOKEN_LEFT_BRACKET)) { syntax_error_at(runtime, "expected [ to begin block"); return; }
     int depth = 1;
     while (peek(runtime)->type != TOKEN_EOF && depth > 0) {
         if (match(runtime, TOKEN_LEFT_BRACKET)) depth++;
@@ -638,7 +658,7 @@ static void skip_block(Runtime *runtime) {
 }
 static void execute_statement(Runtime *runtime);
 static void execute_block(Runtime *runtime) {
-    if (!match(runtime, TOKEN_LEFT_BRACKET)) { error_at(runtime, "expected [ to begin block"); return; }
+    if (!match(runtime, TOKEN_LEFT_BRACKET)) { syntax_error_at(runtime, "expected [ to begin block"); return; }
     while (peek(runtime)->type != TOKEN_EOF && peek(runtime)->type != TOKEN_RIGHT_BRACKET && !runtime->failed && !runtime->break_signal && !runtime->continue_signal && !runtime->return_signal) {
         skip_lines(runtime);
         if (peek(runtime)->type != TOKEN_RIGHT_BRACKET) execute_statement(runtime);
@@ -776,8 +796,9 @@ static void declare_class(Runtime *runtime) {
         skip_lines(runtime);
         if (match(runtime, TOKEN_LET)) {
             Token *field_name = peek(runtime);
-            if (!match(runtime, TOKEN_IDENTIFIER) || !match(runtime, TOKEN_EQUAL)) { error_at(runtime, "expected field name and ="); break; }
-            Value initial = expression(runtime);
+            if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "expected field name"); break; }
+            Value initial = null_value();
+            if (match(runtime, TOKEN_EQUAL)) initial = expression(runtime);
             Field *field = calloc(1, sizeof(*field)); field->name = duplicate_text(field_name->lexeme); field->value = initial;
             field->next = class_info->fields; class_info->fields = field;
         } else if (match(runtime, TOKEN_PRIVATE) || match(runtime, TOKEN_FUNC)) {
@@ -799,7 +820,12 @@ static void declare_class(Runtime *runtime) {
     }
 }
 static Value call_user_function(Runtime *runtime, Function *function, Value *arguments, size_t count) {
+    if (runtime->call_depth >= 256) {
+        report_error(runtime, "maximum function recursion depth exceeded", ERROR_RECURSION);
+        return null_value();
+    }
     if (count != function->parameter_count) { error_at(runtime, "wrong number of function arguments"); return null_value(); }
+    runtime->call_depth++;
     Variable *saved_variables = runtime->variables;
     size_t saved_current = runtime->current;
     TokenList *saved_tokens = runtime->tokens;
@@ -817,7 +843,33 @@ static Value call_user_function(Runtime *runtime, Function *function, Value *arg
     free_value(&runtime->return_value);
     runtime->return_value = saved_return_value; runtime->return_signal = saved_return_signal;
     runtime->variables = saved_variables; runtime->current = saved_current; runtime->tokens = saved_tokens; runtime->this_instance = saved_this; runtime->active_class = saved_active_class;
+    runtime->call_depth--;
     return result;
+}
+static void skip_condition(Runtime *runtime) {
+    int angles = 0, parentheses = 0, braces = 0;
+    while (peek(runtime)->type != TOKEN_EOF) {
+        TokenType type = peek(runtime)->type;
+        if (type == TOKEN_LEFT_BRACKET && angles == 0 && parentheses == 0 && braces == 0) return;
+        if (type == TOKEN_LEFT_ANGLE) angles++;
+        else if (type == TOKEN_RIGHT_ANGLE && angles > 0) angles--;
+        else if (type == TOKEN_LEFT_PAREN) parentheses++;
+        else if (type == TOKEN_RIGHT_PAREN && parentheses > 0) parentheses--;
+        else if (type == TOKEN_LEFT_BRACE) braces++;
+        else if (type == TOKEN_RIGHT_BRACE && braces > 0) braces--;
+        advance(runtime);
+    }
+}
+static void skip_if(Runtime *runtime) {
+    skip_condition(runtime);
+    skip_lines(runtime);
+    skip_block(runtime);
+    skip_lines(runtime);
+    if (match(runtime, TOKEN_ELSE)) {
+        skip_lines(runtime);
+        if (match(runtime, TOKEN_IF)) skip_if(runtime);
+        else skip_block(runtime);
+    }
 }
 static void execute_if(Runtime *runtime) {
     Value condition = expression(runtime);
@@ -828,7 +880,7 @@ static void execute_if(Runtime *runtime) {
     if (match(runtime, TOKEN_ELSE)) {
         skip_lines(runtime);
         if (match(runtime, TOKEN_IF)) {
-            if (enabled) { skip_block(runtime); }
+            if (enabled) skip_if(runtime);
             else execute_if(runtime);
         } else if (enabled) skip_block(runtime); else execute_block(runtime);
     }
@@ -853,6 +905,7 @@ static void execute_while(Runtime *runtime, int infinite) {
 static void execute_try(Runtime *runtime) {
     execute_block(runtime);
     int caught = runtime->failed;
+    ErrorType caught_type = runtime->error_type;
     char *message = duplicate_text(runtime->error_message ? runtime->error_message : "runtime error");
     skip_lines(runtime);
     if (!match(runtime, TOKEN_CATCH)) {
@@ -860,14 +913,31 @@ static void execute_try(Runtime *runtime) {
         free(message); return;
     }
     skip_lines(runtime);
-    if (!match(runtime, TOKEN_LEFT_ANGLE)) { error_at(runtime, "catch expects <error>"); free(message); return; }
-    Token *name = peek(runtime);
-    if (!match(runtime, TOKEN_IDENTIFIER) || !match(runtime, TOKEN_RIGHT_ANGLE)) { error_at(runtime, "catch expects an error variable"); free(message); return; }
+    if (!match(runtime, TOKEN_LEFT_ANGLE)) { syntax_error_at(runtime, "catch expects <error-type> or <> "); free(message); return; }
+    Token *name = NULL;
+    ErrorType expected_type = ERROR_VALUE;
+    int typed = 0;
+    if (peek(runtime)->type == TOKEN_IDENTIFIER) {
+        Token *first = advance(runtime);
+        if (match(runtime, TOKEN_COLON)) {
+            name = first;
+            Token *type_name = peek(runtime);
+            if (!match(runtime, TOKEN_IDENTIFIER) || !parse_error_type(type_name->lexeme, &expected_type)) {
+                syntax_error_at(runtime, "catch expects ValueErr, RecurErr, DivisionErr, or SyntaxErr");
+                free(message); return;
+            }
+            typed = 1;
+        } else if (parse_error_type(first->lexeme, &expected_type)) typed = 1;
+        else name = first;
+    }
+    if (!match(runtime, TOKEN_RIGHT_ANGLE)) { syntax_error_at(runtime, "catch expects > after error type"); free(message); return; }
     skip_lines(runtime);
-    if (caught) {
+    if (caught && (!typed || expected_type == caught_type)) {
         runtime->failed = 0;
         runtime->exception_raised = 0;
-        Value error = string_value(message); set_variable(runtime, name->lexeme, error, 0); free_value(&error);
+        if (name) {
+            Value error = string_value(message); set_variable(runtime, name->lexeme, error, 0); free_value(&error);
+        }
         execute_block(runtime);
     } else skip_block(runtime);
     free(message);
@@ -903,8 +973,13 @@ static void execute_statement(Runtime *runtime) {
     int is_const = match(runtime, TOKEN_CONST);
     if (is_const || match(runtime, TOKEN_LET)) {
         Token *name = peek(runtime);
-        if (!match(runtime, TOKEN_IDENTIFIER) || !match(runtime, TOKEN_EQUAL)) { error_at(runtime, "expected variable name and ="); return; }
-        Value value = expression(runtime); set_variable(runtime, name->lexeme, value, is_const); free_value(&value); return;
+        if (!match(runtime, TOKEN_IDENTIFIER)) { syntax_error_at(runtime, "expected variable name"); return; }
+        Value value = null_value();
+        if (match(runtime, TOKEN_EQUAL)) value = expression(runtime);
+        else if (peek(runtime)->type != TOKEN_NEWLINE && peek(runtime)->type != TOKEN_SEMICOLON && peek(runtime)->type != TOKEN_RIGHT_BRACKET && peek(runtime)->type != TOKEN_EOF) {
+            syntax_error_at(runtime, "expected = or end of declaration"); return;
+        }
+        set_variable(runtime, name->lexeme, value, is_const); free_value(&value); return;
     }
     if (match(runtime, TOKEN_IF)) { execute_if(runtime); return; }
     if (match(runtime, TOKEN_TRY)) { execute_try(runtime); return; }
@@ -920,18 +995,39 @@ static void execute_statement(Runtime *runtime) {
     Value value = expression(runtime); free_value(&value);
 }
 
+static int program_has_main(TokenList *tokens) {
+    int block_depth = 0;
+    for (size_t i = 0; i + 1 < tokens->count; i++) {
+        TokenType type = tokens->items[i].type;
+        if (block_depth == 0 && type == TOKEN_FUNC &&
+            tokens->items[i + 1].type == TOKEN_IDENTIFIER &&
+            strcmp(tokens->items[i + 1].lexeme, "main") == 0) return 1;
+        if (type == TOKEN_LEFT_BRACKET) block_depth++;
+        else if (type == TOKEN_RIGHT_BRACKET && block_depth > 0) block_depth--;
+    }
+    return 0;
+}
+
 static void execute_program(Runtime *runtime) {
     while (peek(runtime)->type != TOKEN_EOF && !runtime->failed) {
-        execute_statement(runtime);
+        if (runtime->has_main && !runtime->importing_module &&
+            peek(runtime)->type != TOKEN_IMPORT && peek(runtime)->type != TOKEN_CLASS &&
+            peek(runtime)->type != TOKEN_FUNC) {
+            skip_import_only_statement(runtime);
+        } else execute_statement(runtime);
         skip_lines(runtime);
+    }
+    if (runtime->has_main && !runtime->importing_module && !runtime->failed) {
+        Function *main_function = find_function(runtime, "main");
+        if (main_function) call_user_function(runtime, main_function, NULL, 0);
     }
 }
 
 int runtime_run(TokenList *tokens) {
-    Runtime runtime = {.tokens = tokens, .return_value = null_value()};
+    Runtime runtime = {.tokens = tokens, .return_value = null_value(), .has_main = program_has_main(tokens)};
     execute_program(&runtime);
     if (runtime.failed && runtime.exception_raised)
-        fprintf(stderr, "Mellow exception: %s\n", runtime.error_message ? runtime.error_message : "runtime error");
+        fprintf(stderr, "Mellow exception [%s]: %s\n", error_type_name(runtime.error_type), runtime.error_message ? runtime.error_message : "runtime error");
     while (runtime.variables) { Variable *next = runtime.variables->next; free(runtime.variables->name); free_value(&runtime.variables->value); free(runtime.variables); runtime.variables = next; }
     while (runtime.functions) { Function *next = runtime.functions->next; for (size_t i = 0; i < runtime.functions->parameter_count; i++) free(runtime.functions->parameters[i]); free(runtime.functions->parameters); free(runtime.functions->name); free(runtime.functions); runtime.functions = next; }
     for (size_t i = 0; i < runtime.module_count; i++) { token_list_free(runtime.modules[i]); free(runtime.modules[i]); }

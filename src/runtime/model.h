@@ -42,6 +42,13 @@ typedef struct Instance {
     Field *fields;
 } Instance;
 
+typedef enum {
+    ERROR_VALUE,
+    ERROR_RECURSION,
+    ERROR_DIVISION,
+    ERROR_SYNTAX
+} ErrorType;
+
 typedef struct {
     TokenList *tokens;
     size_t current;
@@ -55,7 +62,10 @@ typedef struct {
     size_t import_name_count;
     int failed;
     char *error_message;
+    ErrorType error_type;
     int exception_raised;
+    size_t call_depth;
+    int has_main;
     int break_signal;
     int continue_signal;
     int return_signal;
