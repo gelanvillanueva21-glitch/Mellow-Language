@@ -1,5 +1,5 @@
 func mdas<> [
-	// 1 mul 3 add 7 div 2 sub 8 add 8
+	// 1 multiply 3 add 7 divide 2 subtract 8 add 8
 	// Multiplication and division are grouped first.
 	let multiplied = multiply<1, 3>
 	let divided = divide<7, 2>

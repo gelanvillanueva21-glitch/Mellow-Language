@@ -133,9 +133,10 @@ numeric text, `to_int` truncates it, and `to_bool` accepts `true`, `false`, `1`,
 or `0`.
 
 `evaluate<text>` parses a text expression containing numeric values and the
-words `add`, `sub`, `mul`, and `div`. It applies normal MDAS precedence, so
-`1 mul 3 add 7 div 2 sub 8 add 8` evaluates multiplication and division before
-addition and subtraction. `calculate_expression` is an alias.
+words `add`, `subtract`, `multiply`, and `divide`. It applies normal MDAS
+precedence, so `1 multiply 3 add 7 divide 2 subtract 8 add 8` evaluates
+multiplication and division before addition and subtraction.
+`calculate_expression` is an alias.
 
 ## Examples
 

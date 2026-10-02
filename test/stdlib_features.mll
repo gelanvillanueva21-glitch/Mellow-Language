@@ -1,5 +1,3 @@
-import "math"
-
 let items = list<1, 2, 3>
 items.push<4>
 if not<equal<items.len<>, 4>> [
