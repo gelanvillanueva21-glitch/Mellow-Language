@@ -7,6 +7,7 @@
     { "include": "#function-declaration" },
     { "include": "#class-declaration" },
     { "include": "#error-types" },
+    { "include": "#invalid-return-annotation" },
     { "include": "#constants" },
     { "include": "#builtins" },
     { "include": "#keywords" },
@@ -79,6 +80,14 @@
       "name": "support.type.exception.mellow",
       "match": "\\b(ValueErr|RecurErr|DivisionErr|SyntaxErr)\\b"
     },
+    "return-types": {
+      "name": "storage.type.return.mellow",
+      "match": "\\b(String|Number|Boolean|Nothing)\\b"
+    },
+    "invalid-return-annotation": {
+      "name": "invalid.illegal.return-type.mellow",
+      "match": "->[ \\t]*(?!(String|Number|Boolean|Nothing)\\b)([A-Za-z_][A-Za-z0-9_]*|(?=\\[)|$)"
+    },
     "constants": {
       "name": "constant.language.mellow",
       "match": "\\b(true|false|null)\\b"
@@ -89,7 +98,7 @@
     },
     "keywords": {
       "name": "keyword.control.mellow",
-      "match": "\\b(break|catch|class|const|continue|else|for|func|if|import|in|let|loop|private|public|return|super|this|try|while)\\b"
+      "match": "\\b(break|catch|class|const|continue|else|for|func|if|import|in|let|loop|private|public|return|static|super|this|try|while)\\b"
     },
     "calls": {
       "name": "entity.name.function.call.mellow",
@@ -120,6 +129,10 @@
         {
           "name": "keyword.operator.assignment.mellow",
           "match": "="
+        },
+        {
+          "name": "punctuation.separator.return-type.mellow",
+          "match": "->"
         },
         {
           "name": "punctuation.accessor.mellow",

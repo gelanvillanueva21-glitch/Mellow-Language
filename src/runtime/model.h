@@ -11,6 +11,14 @@ typedef struct Variable {
     struct Variable *next;
 } Variable;
 
+typedef enum {
+    RETURN_UNSPECIFIED,
+    RETURN_STRING,
+    RETURN_NUMBER,
+    RETURN_BOOLEAN,
+    RETURN_NOTHING
+} FunctionReturnType;
+
 typedef struct Function {
     char *name;
     char **parameters;
@@ -19,22 +27,30 @@ typedef struct Function {
     size_t body_end;
     TokenList *token_source;
     struct Class *owner;
+    FunctionReturnType return_type;
     int is_private;
+    int is_static;
     struct Function *next;
 } Function;
 
 typedef struct Field {
     char *name;
     Value value;
+    struct Class *owner;
     struct Field *next;
+    int is_private;
+    int is_static;
 } Field;
 
 typedef struct Class {
     char *name;
     struct Class *parent;
     Field *fields;
+    Field *static_fields;
     Function *methods;
+    TokenList *token_source;
     struct Class *next;
+    int is_private;
 } Class;
 
 typedef struct Instance {

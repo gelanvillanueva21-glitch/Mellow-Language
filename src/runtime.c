@@ -113,10 +113,12 @@ static Function *find_method(Class *class_info, const char *name) {
             if (strcmp(method->name, name) == 0) return method;
     return NULL;
 }
-static int is_descendant(Class *class_info, Class *ancestor) {
-    for (Class *current = class_info; current; current = current->parent)
-        if (current == ancestor) return 1;
-    return 0;
+static Field *find_static_field(Class *class_info, const char *name) {
+    for (Class *current = class_info; current; current = current->parent) {
+        Field *field = find_field(current->static_fields, name);
+        if (field) return field;
+    }
+    return NULL;
 }
 static int selected_import(Runtime *runtime, const char *name) {
     if (!runtime->importing_module || runtime->import_name_count == 0) return 1;
@@ -125,7 +127,25 @@ static int selected_import(Runtime *runtime, const char *name) {
     return 0;
 }
 static int can_access_method(Runtime *runtime, Function *method) {
-    return !method->is_private || (runtime->active_class && is_descendant(runtime->active_class, method->owner));
+    return !method->is_private || runtime->active_class == method->owner;
+}
+static int can_access_field(Runtime *runtime, Field *field) {
+    return !field->is_private || runtime->active_class == field->owner;
+}
+static int can_access_class(Runtime *runtime, Class *class_info) {
+    return !class_info->is_private || runtime->tokens == class_info->token_source;
+}
+static int can_access_function(Runtime *runtime, Function *function) {
+    return !function->is_private || runtime->tokens == function->token_source;
+}
+static int return_type_matches(FunctionReturnType type, Value value) {
+    switch (type) {
+        case RETURN_STRING: return value.type == VALUE_STRING;
+        case RETURN_NUMBER: return value.type == VALUE_NUMBER;
+        case RETURN_BOOLEAN: return value.type == VALUE_BOOL;
+        case RETURN_NOTHING: return value.type == VALUE_NULL;
+        default: return 1;
+    }
 }
 static Field *instance_field(Instance *instance, const char *name) {
     return instance ? find_field(instance->fields, name) : NULL;
@@ -138,6 +158,7 @@ static void copy_class_fields(Class *class_info, Instance *instance) {
     for (Field *field = class_info->fields; field; field = field->next) {
         Field *copy = calloc(1, sizeof(*copy));
         copy->name = duplicate_text(field->name); copy->value = copy_value(field->value);
+        copy->owner = field->owner; copy->is_private = field->is_private;
         copy->next = instance->fields; instance->fields = copy;
     }
 }
@@ -196,9 +217,6 @@ static size_t parse_arguments(Runtime *runtime, Value *arguments) {
 
 static int is_number_pair(Value *arguments, size_t count) {
     return count == 2 && arguments[0].type == VALUE_NUMBER && arguments[1].type == VALUE_NUMBER;
-}
-static int named_as(const char *name, const char *short_name, const char *long_name) {
-    return strcmp(name, short_name) == 0 || strcmp(name, long_name) == 0;
 }
 static char *text_range(const char *start, size_t length) {
     char *text = malloc(length + 1);
@@ -269,8 +287,52 @@ static Value string_join(Value list, const char *delimiter) {
     }
     Value value = string_value(result); free(result); return value;
 }
+static size_t value_length(Value value) {
+    if (value.type == VALUE_STRING) return strlen(value.string);
+    if (value.type == VALUE_ARRAY || value.type == VALUE_LIST) return value.collection ? value.collection->count : 0;
+    if (value.type == VALUE_DICT) {
+        size_t total = 0;
+        for (DictEntry *entry = value.dictionary; entry; entry = entry->next) total++;
+        return total;
+    }
+    return 0;
+}
+
+
+static const char *deprecated_builtin_replacement(const char *name) {
+    if (strcmp(name, "sub") == 0) return "subtract";
+    if (strcmp(name, "mul") == 0) return "multiply";
+    if (strcmp(name, "div") == 0) return "divide";
+    if (strcmp(name, "mod") == 0) return "modulo";
+    if (strcmp(name, "eq") == 0) return "equal";
+    if (strcmp(name, "neq") == 0) return "not_equal";
+    if (strcmp(name, "lt") == 0) return "less_than";
+    if (strcmp(name, "gt") == 0) return "greater_than";
+    if (strcmp(name, "lte") == 0) return "less_equal";
+    if (strcmp(name, "gte") == 0) return "greater_equal";
+    if (strcmp(name, "less") == 0) return "less_than";
+    if (strcmp(name, "greater") == 0) return "greater_than";
+    if (strcmp(name, "sum") == 0) return "add";
+    if (strcmp(name, "addition") == 0) return "add";
+    if (strcmp(name, "minus") == 0) return "subtract";
+    if (strcmp(name, "times") == 0) return "multiply";
+    if (strcmp(name, "quotient") == 0) return "divide";
+    if (strcmp(name, "remainder") == 0) return "modulo";
+    if (strcmp(name, "pow") == 0) return "power";
+    return NULL;
+}
+
 static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, size_t count) {
+    const char *replacement = deprecated_builtin_replacement(name);
+    if (replacement) {
+        char message[256];
+        snprintf(message, sizeof(message), "builtin '%s' is deprecated; use '%s' instead", name, replacement);
+        report_error(runtime, message, ERROR_VALUE);
+        return null_value();
+    }
     if (strcmp(name, "dict") == 0 && count == 0) return dictionary_value();
+    if (strcmp(name, "rand") == 0 && count == 0) return number_value((double)rand() / (double)RAND_MAX);
+    if (strcmp(name, "random") == 0 && count == 0) return number_value((double)rand() / (double)RAND_MAX);
     if (strcmp(name, "input") == 0 && (count == 0 || (count == 1 && arguments[0].type == VALUE_STRING))) {
         if (count == 1) { fputs(arguments[0].string, stdout); fflush(stdout); }
         char buffer[4096];
@@ -327,34 +389,49 @@ static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, 
         free_instance(instance); return null_value();
     }
     if (count < 1 && (strcmp(name, "len") == 0 || strcmp(name, "to_string") == 0)) { error_at(runtime, "builtin needs an argument"); return null_value(); }
-    if ((strcmp(name, "add") == 0 || strcmp(name, "sub") == 0 || strcmp(name, "mul") == 0 || strcmp(name, "div") == 0 || strcmp(name, "mod") == 0 || strcmp(name, "pow") == 0) && count == 2) {
-        if ((strcmp(name, "add") == 0) && arguments[0].type == VALUE_STRING && arguments[1].type == VALUE_STRING) {
+    if (strcmp(name, "add") == 0 && count == 2) {
+        if (arguments[0].type == VALUE_STRING && arguments[1].type == VALUE_STRING) {
             size_t length = strlen(arguments[0].string) + strlen(arguments[1].string) + 1;
             char *text = malloc(length); snprintf(text, length, "%s%s", arguments[0].string, arguments[1].string);
             Value result = string_value(text); free(text); return result;
         }
-        if ((strcmp(name, "add") == 0) && (arguments[0].type == VALUE_ARRAY || arguments[0].type == VALUE_LIST) && arguments[0].type == arguments[1].type) {
+        if ((arguments[0].type == VALUE_ARRAY || arguments[0].type == VALUE_LIST) && arguments[0].type == arguments[1].type) {
             Value result = copy_value(arguments[0]);
             for (size_t i = 0; i < arguments[1].collection->count; i++) collection_append(result, arguments[1].collection->items[i]);
             return result;
         }
         if (arguments[0].type != VALUE_NUMBER || arguments[1].type != VALUE_NUMBER) { error_at(runtime, "arithmetic expects numbers"); return null_value(); }
-        if (strcmp(name, "add") == 0) return number_value(arguments[0].number + arguments[1].number);
-        if (strcmp(name, "sub") == 0) return number_value(arguments[0].number - arguments[1].number);
-        if (strcmp(name, "mul") == 0) return number_value(arguments[0].number * arguments[1].number);
-        if (strcmp(name, "mod") == 0) return number_value(fmod(arguments[0].number, arguments[1].number));
-        if (strcmp(name, "pow") == 0) return number_value(pow(arguments[0].number, arguments[1].number));
+        return number_value(arguments[0].number + arguments[1].number);
+    }
+    if (strcmp(name, "subtract") == 0 && count == 2) {
+        if (arguments[0].type != VALUE_NUMBER || arguments[1].type != VALUE_NUMBER) { error_at(runtime, "arithmetic expects numbers"); return null_value(); }
+        return number_value(arguments[0].number - arguments[1].number);
+    }
+    if (strcmp(name, "multiply") == 0 && count == 2) {
+        if (arguments[0].type != VALUE_NUMBER || arguments[1].type != VALUE_NUMBER) { error_at(runtime, "arithmetic expects numbers"); return null_value(); }
+        return number_value(arguments[0].number * arguments[1].number);
+    }
+    if (strcmp(name, "divide") == 0 && count == 2) {
+        if (arguments[0].type != VALUE_NUMBER || arguments[1].type != VALUE_NUMBER) { error_at(runtime, "arithmetic expects numbers"); return null_value(); }
         if (arguments[1].number == 0) { report_error(runtime, "division by zero", ERROR_DIVISION); return null_value(); }
         return number_value(arguments[0].number / arguments[1].number);
     }
+    if (strcmp(name, "modulo") == 0 && count == 2) {
+        if (arguments[0].type != VALUE_NUMBER || arguments[1].type != VALUE_NUMBER) { error_at(runtime, "arithmetic expects numbers"); return null_value(); }
+        return number_value(fmod(arguments[0].number, arguments[1].number));
+    }
+    if (strcmp(name, "power") == 0 && count == 2) {
+        if (arguments[0].type != VALUE_NUMBER || arguments[1].type != VALUE_NUMBER) { error_at(runtime, "arithmetic expects numbers"); return null_value(); }
+        return number_value(pow(arguments[0].number, arguments[1].number));
+    }
     if (strcmp(name, "sqrt") == 0 && count == 1 && arguments[0].type == VALUE_NUMBER) return number_value(sqrt(arguments[0].number));
     if ((strcmp(name, "inc") == 0 || strcmp(name, "dec") == 0) && count == 1 && arguments[0].type == VALUE_NUMBER) return number_value(arguments[0].number + (strcmp(name, "inc") == 0 ? 1 : -1));
-    if (named_as(name, "eq", "equal") && count == 2) return bool_value(value_equal(arguments[0], arguments[1]));
-    if (named_as(name, "neq", "not_equal") && count == 2) return bool_value(!value_equal(arguments[0], arguments[1]));
-    if (is_number_pair(arguments, count) && (named_as(name, "lt", "less") || named_as(name, "gt", "greater") || named_as(name, "lte", "less_equal") || named_as(name, "gte", "greater_equal"))) {
-        if (named_as(name, "lt", "less")) return bool_value(arguments[0].number < arguments[1].number);
-        if (named_as(name, "gt", "greater")) return bool_value(arguments[0].number > arguments[1].number);
-        if (named_as(name, "lte", "less_equal")) return bool_value(arguments[0].number <= arguments[1].number);
+    if (strcmp(name, "equal") == 0 && count == 2) return bool_value(value_equal(arguments[0], arguments[1]));
+    if (strcmp(name, "not_equal") == 0 && count == 2) return bool_value(!value_equal(arguments[0], arguments[1]));
+    if (is_number_pair(arguments, count) && (strcmp(name, "less_than") == 0 || strcmp(name, "greater_than") == 0 || strcmp(name, "less_equal") == 0 || strcmp(name, "greater_equal") == 0)) {
+        if (strcmp(name, "less_than") == 0) return bool_value(arguments[0].number < arguments[1].number);
+        if (strcmp(name, "greater_than") == 0) return bool_value(arguments[0].number > arguments[1].number);
+        if (strcmp(name, "less_equal") == 0) return bool_value(arguments[0].number <= arguments[1].number);
         return bool_value(arguments[0].number >= arguments[1].number);
     }
     if (strcmp(name, "and") == 0 && count == 2) return bool_value(arguments[0].boolean && arguments[1].boolean);
@@ -472,9 +549,11 @@ static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, 
         for (size_t i = 0; i < count; i++) collection_append(result, arguments[i]);
         return result;
     }
-    if (strcmp(name, "len") == 0 && arguments[0].type == VALUE_STRING) return number_value((double)strlen(arguments[0].string));
-    if (strcmp(name, "len") == 0 && (arguments[0].type == VALUE_ARRAY || arguments[0].type == VALUE_LIST)) return number_value((double)arguments[0].collection->count);
-    if (strcmp(name, "len") == 0 && arguments[0].type == VALUE_DICT) { size_t count = 0; for (DictEntry *entry = arguments[0].dictionary; entry; entry = entry->next) count++; return number_value((double)count); }
+    if (strcmp(name, "len") == 0 && count == 1) {
+        size_t length = value_length(arguments[0]);
+        if (length || arguments[0].type == VALUE_STRING || arguments[0].type == VALUE_ARRAY || arguments[0].type == VALUE_LIST || arguments[0].type == VALUE_DICT) return number_value((double)length);
+        error_at(runtime, "len expects a string, array, list, or dictionary"); return null_value();
+    }
     if (strcmp(name, "to_string") == 0) {
         char buffer[64];
         if (arguments[0].type == VALUE_STRING) return copy_value(arguments[0]);
@@ -486,6 +565,129 @@ static Value call_builtin(Runtime *runtime, const char *name, Value *arguments, 
     }
     fprintf(stderr, "Mellow error at %d:%d: unknown builtin '%s'\n", peek(runtime)->line, peek(runtime)->column, name);
     runtime->failed = 1; return null_value();
+}
+
+static Value read_collection_entry(Value container, Value key) {
+    if (container.type == VALUE_DICT) {
+        if (key.type != VALUE_STRING) return null_value();
+        Value *found = dictionary_get(container, key.string);
+        return found ? copy_value(*found) : null_value();
+    }
+    if ((container.type == VALUE_ARRAY || container.type == VALUE_LIST) && key.type == VALUE_NUMBER) {
+        long index = (long)key.number;
+        if (index < 0 || (size_t)index >= container.collection->count) return null_value();
+        return copy_value(container.collection->items[index]);
+    }
+    return null_value();
+}
+
+static void write_collection_entry(Runtime *runtime, Value *container, Value key, Value item) {
+    if (container->type == VALUE_DICT) {
+        if (key.type != VALUE_STRING) {
+            error_at(runtime, "dictionary keys must be strings");
+            return;
+        }
+        dictionary_set(container, key.string, item);
+        return;
+    }
+    if ((container->type == VALUE_ARRAY || container->type == VALUE_LIST) && key.type == VALUE_NUMBER) {
+        long index = (long)key.number;
+        if (index < 0 || (size_t)index >= container->collection->count) {
+            error_at(runtime, "list index out of range");
+            return;
+        }
+        free_value(&container->collection->items[index]);
+        container->collection->items[index] = copy_value(item);
+        return;
+    }
+    error_at(runtime, "cannot assign into this collection type");
+}
+
+static Value call_collection_method(Runtime *runtime, Value container, const char *name, Value *arguments, size_t count) {
+    if (container.type == VALUE_ARRAY || container.type == VALUE_LIST) {
+        if (strcmp(name, "len") == 0 && count == 0) return number_value((double)value_length(container));
+        if (strcmp(name, "push") == 0 && count == 1) { collection_append(container, arguments[0]); return null_value(); }
+        if (strcmp(name, "pop") == 0 && count == 0) {
+            if (container.collection->count == 0) return null_value();
+            Value result = copy_value(container.collection->items[container.collection->count - 1]);
+            free_value(&container.collection->items[container.collection->count - 1]);
+            container.collection->count--;
+            return result;
+        }
+        if (strcmp(name, "get") == 0 && count == 1 && arguments[0].type == VALUE_NUMBER) {
+            long index = (long)arguments[0].number;
+            if (index < 0 || (size_t)index >= container.collection->count) return null_value();
+            return copy_value(container.collection->items[index]);
+        }
+        if (strcmp(name, "set") == 0 && count == 2 && arguments[0].type == VALUE_NUMBER) {
+            long index = (long)arguments[0].number;
+            if (index < 0 || (size_t)index >= container.collection->count) { error_at(runtime, "list index out of range"); return null_value(); }
+            free_value(&container.collection->items[index]);
+            container.collection->items[index] = copy_value(arguments[1]);
+            return null_value();
+        }
+        if (strcmp(name, "remove") == 0 && count == 1 && arguments[0].type == VALUE_NUMBER) {
+            long index = (long)arguments[0].number;
+            if (index < 0 || (size_t)index >= container.collection->count) { error_at(runtime, "list index out of range"); return null_value(); }
+            Value result = copy_value(container.collection->items[index]);
+            for (size_t i = (size_t)index + 1; i < container.collection->count; i++) container.collection->items[i - 1] = copy_value(container.collection->items[i]);
+            for (size_t i = 0; i < container.collection->count - 1; i++) free_value(&container.collection->items[i]);
+            container.collection->count--;
+            return result;
+        }
+        if (strcmp(name, "clear") == 0 && count == 0) {
+            for (size_t i = 0; i < container.collection->count; i++) free_value(&container.collection->items[i]);
+            container.collection->count = 0;
+            return null_value();
+        }
+        if (strcmp(name, "has") == 0 && count == 1) {
+            for (size_t i = 0; i < container.collection->count; i++) if (value_equal(container.collection->items[i], arguments[0])) return bool_value(1);
+            return bool_value(0);
+        }
+    }
+    if (container.type == VALUE_DICT) {
+        if (strcmp(name, "len") == 0 && count == 0) return number_value((double)value_length(container));
+        if (strcmp(name, "get") == 0 && count == 1 && arguments[0].type == VALUE_STRING) {
+            Value *found = dictionary_get(container, arguments[0].string);
+            return found ? copy_value(*found) : null_value();
+        }
+        if (strcmp(name, "put") == 0 && count == 2 && arguments[0].type == VALUE_STRING) {
+            dictionary_set(&container, arguments[0].string, arguments[1]);
+            return null_value();
+        }
+        if (strcmp(name, "set") == 0 && count == 2 && arguments[0].type == VALUE_STRING) {
+            dictionary_set(&container, arguments[0].string, arguments[1]);
+            return null_value();
+        }
+        if (strcmp(name, "has") == 0 && count == 1 && arguments[0].type == VALUE_STRING) return bool_value(dictionary_has(container, arguments[0].string));
+        if (strcmp(name, "remove") == 0 && count == 1 && arguments[0].type == VALUE_STRING) {
+            Value *found = dictionary_get(container, arguments[0].string);
+            if (!found) return null_value();
+            Value result = copy_value(*found);
+            DictEntry *entry = container.dictionary; DictEntry *previous = NULL;
+            while (entry && strcmp(entry->key, arguments[0].string) != 0) { previous = entry; entry = entry->next; }
+            if (!entry) return result;
+            if (previous) previous->next = entry->next; else container.dictionary = entry->next;
+            free(entry->key); free_value(entry->value); free(entry->value); free(entry);
+            return result;
+        }
+        if (strcmp(name, "keys") == 0 && count == 0) {
+            Value result = collection_value(VALUE_LIST);
+            for (DictEntry *entry = container.dictionary; entry; entry = entry->next) collection_append(result, string_value(entry->key));
+            return result;
+        }
+        if (strcmp(name, "values") == 0 && count == 0) {
+            Value result = collection_value(VALUE_LIST);
+            for (DictEntry *entry = container.dictionary; entry; entry = entry->next) collection_append(result, *entry->value);
+            return result;
+        }
+        if (strcmp(name, "clear") == 0 && count == 0) {
+            while (container.dictionary) { DictEntry *next = container.dictionary->next; free(container.dictionary->key); free_value(container.dictionary->value); free(container.dictionary->value); free(container.dictionary); container.dictionary = next; }
+            return null_value();
+        }
+    }
+    error_at(runtime, "unsupported collection method");
+    return null_value();
 }
 
 static Value expression(Runtime *runtime) {
@@ -529,14 +731,16 @@ static Value expression(Runtime *runtime) {
             if (match(runtime, TOKEN_LEFT_ANGLE)) {
                 Value arguments[32]; size_t count = parse_arguments(runtime, arguments);
                 Function *method = runtime->this_instance ? find_method(runtime->this_instance->class_info, member->lexeme) : NULL;
-                Value result = method && can_access_method(runtime, method) ? call_user_function(runtime, method, arguments, count) : null_value();
+                Value result = method && !method->is_static && can_access_method(runtime, method) ? call_user_function(runtime, method, arguments, count) : null_value();
                 if (!method) error_at(runtime, "unknown this method");
+                else if (method->is_static) error_at(runtime, "static methods must be called through the class");
                 else if (!can_access_method(runtime, method)) error_at(runtime, "private method is not accessible here");
                 for (size_t i = 0; i < count; i++) free_value(&arguments[i]);
                 return result;
             }
             Field *field = instance_field(runtime->this_instance, member->lexeme);
             if (!field) { error_at(runtime, "unknown this field"); return null_value(); }
+            if (!can_access_field(runtime, field)) { error_at(runtime, "private field is not accessible here"); return null_value(); }
             return copy_value(field->value);
         }
         return instance_value(runtime->this_instance);
@@ -547,32 +751,78 @@ static Value expression(Runtime *runtime) {
         if (!match(runtime, TOKEN_IDENTIFIER) || !match(runtime, TOKEN_LEFT_ANGLE)) { error_at(runtime, "expected super method call"); return null_value(); }
         Value arguments[32]; size_t count = parse_arguments(runtime, arguments);
         Function *method = runtime->this_instance ? find_method(runtime->this_instance->class_info->parent, method_name->lexeme) : NULL;
-        Value result = method && can_access_method(runtime, method) ? call_user_function(runtime, method, arguments, count) : null_value();
+        Value result = method && !method->is_static && can_access_method(runtime, method) ? call_user_function(runtime, method, arguments, count) : null_value();
         if (!method) error_at(runtime, "unknown super method");
+        else if (method->is_static) error_at(runtime, "static methods cannot be called through super");
         else if (!can_access_method(runtime, method)) error_at(runtime, "private method is not accessible here");
         for (size_t i = 0; i < count; i++) free_value(&arguments[i]);
         return result;
     }
     if (token->type == TOKEN_IDENTIFIER || token->type == TOKEN_RAISE || token->type == TOKEN_AND || token->type == TOKEN_OR || token->type == TOKEN_NOT) {
+        if (match(runtime, TOKEN_LEFT_BRACKET)) {
+            Value key = expression(runtime);
+            skip_lines(runtime);
+            if (!match(runtime, TOKEN_RIGHT_BRACKET)) { error_at(runtime, "expected ] after dictionary index"); free_value(&key); return null_value(); }
+            skip_lines(runtime);
+            if (match(runtime, TOKEN_EQUAL)) {
+                Value assigned = expression(runtime);
+                Variable *variable = find_variable(runtime, token->lexeme);
+                if (!variable) { error_at(runtime, "unknown collection variable"); free_value(&key); free_value(&assigned); return null_value(); }
+                write_collection_entry(runtime, &variable->value, key, assigned);
+                free_value(&key); free_value(&assigned); return null_value();
+            }
+            Variable *variable = find_variable(runtime, token->lexeme);
+            if (!variable) { error_at(runtime, "unknown collection variable"); free_value(&key); return null_value(); }
+            Value result = read_collection_entry(variable->value, key);
+            free_value(&key); return result;
+        }
         if (match(runtime, TOKEN_DOT)) {
             Token *member = peek(runtime);
             if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "expected member name"); return null_value(); }
             Variable *base = find_variable(runtime, token->lexeme);
-            if (!base || base->value.type != VALUE_INSTANCE) { error_at(runtime, "member access requires an instance"); return null_value(); }
-            Instance *instance = base->value.instance;
+            if (base && (base->value.type == VALUE_LIST || base->value.type == VALUE_ARRAY || base->value.type == VALUE_DICT)) {
+                if (match(runtime, TOKEN_LEFT_ANGLE)) {
+                    Value arguments[32]; size_t count = parse_arguments(runtime, arguments);
+                    Value result = call_collection_method(runtime, base->value, member->lexeme, arguments, count);
+                    for (size_t i = 0; i < count; i++) free_value(&arguments[i]);
+                    return result;
+                }
+            }
+            if (base && base->value.type == VALUE_INSTANCE) {
+                Instance *instance = base->value.instance;
+                if (match(runtime, TOKEN_LEFT_ANGLE)) {
+                    Value arguments[32]; size_t count = parse_arguments(runtime, arguments);
+                    Function *method = find_method(instance->class_info, member->lexeme);
+                    Instance *saved_this = runtime->this_instance; runtime->this_instance = instance;
+                    Value result = method && !method->is_static && can_access_method(runtime, method) ? call_user_function(runtime, method, arguments, count) : null_value();
+                    runtime->this_instance = saved_this;
+                    if (!method) error_at(runtime, "unknown instance method");
+                    else if (method->is_static) error_at(runtime, "static methods must be called through the class");
+                    else if (!can_access_method(runtime, method)) error_at(runtime, "private method is not accessible here");
+                    for (size_t i = 0; i < count; i++) free_value(&arguments[i]);
+                    return result;
+                }
+                Field *field = instance_field(instance, member->lexeme);
+                if (!field) { error_at(runtime, "unknown instance field"); return null_value(); }
+                if (!can_access_field(runtime, field)) { error_at(runtime, "private field is not accessible here"); return null_value(); }
+                return copy_value(field->value);
+            }
+            Class *class_info = find_class(runtime, token->lexeme);
+            if (!class_info) { error_at(runtime, "member access requires an instance or class"); return null_value(); }
+            if (!can_access_class(runtime, class_info)) { error_at(runtime, "private class is not accessible here"); return null_value(); }
             if (match(runtime, TOKEN_LEFT_ANGLE)) {
                 Value arguments[32]; size_t count = parse_arguments(runtime, arguments);
-                Function *method = find_method(instance->class_info, member->lexeme);
-                Instance *saved_this = runtime->this_instance; runtime->this_instance = instance;
-                Value result = method && can_access_method(runtime, method) ? call_user_function(runtime, method, arguments, count) : null_value();
-                runtime->this_instance = saved_this;
-                if (!method) error_at(runtime, "unknown instance method");
+                Function *method = find_method(class_info, member->lexeme);
+                Value result = method && method->is_static && can_access_method(runtime, method) ? call_user_function(runtime, method, arguments, count) : null_value();
+                if (!method) error_at(runtime, "unknown class method");
+                else if (!method->is_static) error_at(runtime, "instance methods must be called through an object");
                 else if (!can_access_method(runtime, method)) error_at(runtime, "private method is not accessible here");
                 for (size_t i = 0; i < count; i++) free_value(&arguments[i]);
                 return result;
             }
-            Field *field = instance_field(instance, member->lexeme);
-            if (!field) { error_at(runtime, "unknown instance field"); return null_value(); }
+            Field *field = find_static_field(class_info, member->lexeme);
+            if (!field) { error_at(runtime, "unknown static field"); return null_value(); }
+            if (!can_access_field(runtime, field)) { error_at(runtime, "private field is not accessible here"); return null_value(); }
             return copy_value(field->value);
         }
         if (match(runtime, TOKEN_LEFT_ANGLE)) {
@@ -581,24 +831,51 @@ static Value expression(Runtime *runtime) {
             if (strcmp(token->lexeme, "set") == 0) {
                 Token *name = peek(runtime);
                 char *field_name = NULL;
+                const char *class_name = NULL;
+                int this_field = 0;
                 if (match(runtime, TOKEN_THIS)) {
                     if (!match(runtime, TOKEN_DOT)) { error_at(runtime, "set expects this.field"); return null_value(); }
                     Token *member = peek(runtime);
                     if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "set expects a field name"); return null_value(); }
                     field_name = member->lexeme;
-                } else if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "set expects a variable name"); return null_value(); }
-                else field_name = name->lexeme;
+                    this_field = 1;
+                } else if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "set expects a variable or static field"); return null_value(); }
+                else if (match(runtime, TOKEN_DOT)) {
+                    Token *member = peek(runtime);
+                    if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "set expects a static field name"); return null_value(); }
+                    class_name = name->lexeme;
+                    field_name = member->lexeme;
+                } else field_name = name->lexeme;
                 skip_lines(runtime);
                 if (!match(runtime, TOKEN_COMMA)) { error_at(runtime, "set expects a value"); return null_value(); }
                 Value value = expression(runtime);
                 skip_lines(runtime);
                 if (!match(runtime, TOKEN_RIGHT_ANGLE)) error_at(runtime, "expected > after set");
-                Variable *variable = find_variable(runtime, field_name);
-                if (!variable) error_at(runtime, "cannot set an unknown variable");
-                else if (variable->constant) error_at(runtime, "cannot set a const variable");
-                else {
+                if (this_field) {
                     Field *field = instance_field(runtime->this_instance, field_name);
-                    if (field) { free_value(&field->value); field->value = copy_value(value); }
+                    if (!field) error_at(runtime, "cannot set an unknown instance field");
+                    else if (!can_access_field(runtime, field)) error_at(runtime, "private field is not accessible here");
+                    else { free_value(&field->value); field->value = copy_value(value); }
+                } else if (class_name) {
+                    Variable *base = find_variable(runtime, class_name);
+                    if (base && base->value.type == VALUE_INSTANCE) {
+                        Field *field = instance_field(base->value.instance, field_name);
+                        if (!field) error_at(runtime, "unknown instance field");
+                        else if (!can_access_field(runtime, field)) error_at(runtime, "private field is not accessible here");
+                        else { free_value(&field->value); field->value = copy_value(value); }
+                    } else {
+                        Class *class_info = find_class(runtime, class_name);
+                        Field *field = class_info ? find_static_field(class_info, field_name) : NULL;
+                        if (!class_info) error_at(runtime, "unknown instance or class in field assignment");
+                        else if (!can_access_class(runtime, class_info)) error_at(runtime, "private class is not accessible here");
+                        else if (!field) error_at(runtime, "unknown static field");
+                        else if (!can_access_field(runtime, field)) error_at(runtime, "private field is not accessible here");
+                        else { free_value(&field->value); field->value = copy_value(value); }
+                    }
+                } else {
+                    Variable *variable = find_variable(runtime, field_name);
+                    if (!variable) error_at(runtime, "cannot set an unknown variable");
+                    else if (variable->constant) error_at(runtime, "cannot set a const variable");
                     else { free_value(&variable->value); variable->value = copy_value(value); }
                 }
                 free_value(&value);
@@ -623,14 +900,28 @@ static Value expression(Runtime *runtime) {
             Class *class_info = find_class(runtime, token->lexeme);
             Value result;
             if (class_info) {
-                if (count == 0 && !find_method(class_info, "init")) result = instance_value(new_instance(class_info));
-                else {
+                Function *constructor = find_method(class_info, "init");
+                if (!can_access_class(runtime, class_info)) {
+                    error_at(runtime, "private class is not accessible here");
+                    result = null_value();
+                } else if (!constructor && count == 0) result = instance_value(new_instance(class_info));
+                else if (!constructor) {
+                    error_at(runtime, "constructor init not found");
+                    result = null_value();
+                } else if (constructor->is_static) {
+                    error_at(runtime, "init cannot be static");
+                    result = null_value();
+                } else if (!can_access_method(runtime, constructor)) {
+                    error_at(runtime, "private constructor is not accessible here");
+                    result = null_value();
+                } else {
                     Instance *instance = new_instance(class_info); Instance *saved_this = runtime->this_instance; runtime->this_instance = instance;
-                    Function *constructor = find_method(class_info, "init");
-                    if (!constructor) { error_at(runtime, "constructor init not found"); result = null_value(); }
-                    else { call_user_function(runtime, constructor, arguments, count); result = instance_value(instance); }
+                    call_user_function(runtime, constructor, arguments, count); result = instance_value(instance);
                     runtime->this_instance = saved_this;
                 }
+            } else if (function && !can_access_function(runtime, function)) {
+                error_at(runtime, "private function is not accessible here");
+                result = null_value();
             } else result = function ? call_user_function(runtime, function, arguments, count) : call_builtin(runtime, token->lexeme, arguments, count);
             for (size_t i = 0; i < count; i++) free_value(&arguments[i]);
             return result;
@@ -677,6 +968,36 @@ static void remember_module(Runtime *runtime, TokenList *tokens) {
     }
     runtime->modules[runtime->module_count++] = tokens;
 }
+static char *resolve_import_path(const char *raw_path) {
+    if (!raw_path || raw_path[0] == '\0') return NULL;
+    char *candidates[8]; size_t count = 0;
+    candidates[count++] = duplicate_text(raw_path);
+    if (strstr(raw_path, ".") == NULL) {
+        char *module_path = malloc(strlen(raw_path) + 8);
+        if (module_path) {
+            snprintf(module_path, strlen(raw_path) + 8, "%s.mll", raw_path);
+            candidates[count++] = module_path;
+        }
+        char *library_path = malloc(strlen(raw_path) + 12);
+        if (library_path) {
+            snprintf(library_path, strlen(raw_path) + 12, "lib/%s.mll", raw_path);
+            candidates[count++] = library_path;
+        }
+    }
+    for (size_t i = 0; i < count; i++) {
+        char *source = read_file(candidates[i]);
+        if (source) {
+            for (size_t j = 0; j < count; j++) {
+                if (candidates[j]) free(candidates[j]);
+            }
+            return source;
+        }
+        free(candidates[i]);
+        candidates[i] = NULL;
+    }
+    return NULL;
+}
+
 static void execute_import(Runtime *runtime) {
     Token *path = peek(runtime);
     if (!match(runtime, TOKEN_STRING)) { error_at(runtime, "import expects a quoted file path"); return; }
@@ -695,7 +1016,7 @@ static void execute_import(Runtime *runtime) {
             if (!match(runtime, TOKEN_RIGHT_ANGLE)) error_at(runtime, "expected > after import names");
         }
     }
-    char *source = read_file(path->lexeme);
+    char *source = resolve_import_path(path->lexeme);
     if (!source) { error_at(runtime, "could not load imported module"); return; }
     TokenList *module = malloc(sizeof(*module));
     if (!module) { free(source); error_at(runtime, "could not allocate imported module"); return; }
@@ -718,12 +1039,30 @@ static void skip_import_only_statement(Runtime *runtime) {
         advance(runtime);
     }
 }
-static void declare_function(Runtime *runtime) {
+static int parse_return_annotation(Runtime *runtime, Function *function) {
+    if (!match(runtime, TOKEN_ARROW)) return 1;
+    Token *type_name = peek(runtime);
+    if (!match(runtime, TOKEN_IDENTIFIER)) {
+        syntax_error_at(runtime, "expected String, Number, Boolean, or Nothing after ->");
+        return 0;
+    }
+    if (strcmp(type_name->lexeme, "String") == 0) function->return_type = RETURN_STRING;
+    else if (strcmp(type_name->lexeme, "Number") == 0) function->return_type = RETURN_NUMBER;
+    else if (strcmp(type_name->lexeme, "Boolean") == 0) function->return_type = RETURN_BOOLEAN;
+    else if (strcmp(type_name->lexeme, "Nothing") == 0) function->return_type = RETURN_NOTHING;
+    else {
+        syntax_error_at(runtime, "return type must be String, Number, Boolean, or Nothing");
+        return 0;
+    }
+    return 1;
+}
+static void declare_function(Runtime *runtime, int is_private) {
     Token *name = peek(runtime);
     if (!match(runtime, TOKEN_IDENTIFIER) || !match(runtime, TOKEN_LEFT_ANGLE)) { error_at(runtime, "expected function name and parameters"); return; }
     Function *function = calloc(1, sizeof(*function));
     function->name = duplicate_text(name->lexeme);
     function->token_source = runtime->tokens;
+    function->is_private = is_private;
     skip_lines(runtime);
     if (!match(runtime, TOKEN_RIGHT_ANGLE)) {
         do {
@@ -736,6 +1075,7 @@ static void declare_function(Runtime *runtime) {
         } while (match(runtime, TOKEN_COMMA));
         if (!match(runtime, TOKEN_RIGHT_ANGLE)) error_at(runtime, "expected > after parameters");
     }
+    if (!parse_return_annotation(runtime, function)) return;
     skip_lines(runtime);
     if (!match(runtime, TOKEN_LEFT_BRACKET)) { error_at(runtime, "expected [ after function signature"); return; }
     function->body_start = runtime->current;
@@ -770,6 +1110,7 @@ static Function *parse_function_body(Runtime *runtime, const char *name, Class *
         } while (match(runtime, TOKEN_COMMA));
         if (!match(runtime, TOKEN_RIGHT_ANGLE)) error_at(runtime, "expected > after parameters");
     }
+    if (!parse_return_annotation(runtime, function)) return function;
     skip_lines(runtime);
     if (!match(runtime, TOKEN_LEFT_BRACKET)) { error_at(runtime, "expected [ after method signature"); return function; }
     function->body_start = runtime->current;
@@ -782,37 +1123,66 @@ static Function *parse_function_body(Runtime *runtime, const char *name, Class *
     function->body_end = runtime->current - 1;
     return function;
 }
-static void declare_class(Runtime *runtime) {
+static int parse_member_modifiers(Runtime *runtime, int *is_private, int *is_static) {
+    int saw_visibility = 0;
+    *is_private = 0;
+    *is_static = 0;
+    while (1) {
+        if (match(runtime, TOKEN_PRIVATE)) {
+            if (saw_visibility) { syntax_error_at(runtime, "member cannot have multiple visibility modifiers"); return 0; }
+            saw_visibility = 1;
+            *is_private = 1;
+        } else if (match(runtime, TOKEN_PUBLIC)) {
+            if (saw_visibility) { syntax_error_at(runtime, "member cannot have multiple visibility modifiers"); return 0; }
+            saw_visibility = 1;
+        } else if (match(runtime, TOKEN_STATIC)) {
+            if (*is_static) { syntax_error_at(runtime, "member cannot be static more than once"); return 0; }
+            *is_static = 1;
+        } else break;
+    }
+    return 1;
+}
+static void declare_class(Runtime *runtime, int is_private) {
     Token *name = peek(runtime);
     if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "expected class name"); return; }
     Class *class_info = calloc(1, sizeof(*class_info));
     class_info->name = duplicate_text(name->lexeme);
+    class_info->is_private = is_private;
+    class_info->token_source = runtime->tokens;
     if (match(runtime, TOKEN_COLON)) {
         Token *parent = peek(runtime);
         if (!match(runtime, TOKEN_IDENTIFIER)) error_at(runtime, "expected parent class name");
         else class_info->parent = find_class(runtime, parent->lexeme);
         if (!class_info->parent) error_at(runtime, "unknown parent class");
+        else if (!can_access_class(runtime, class_info->parent)) error_at(runtime, "private parent class is not accessible here");
     }
     skip_lines(runtime);
     if (!match(runtime, TOKEN_LEFT_BRACKET)) { error_at(runtime, "expected [ after class name"); free(class_info->name); free(class_info); return; }
     while (peek(runtime)->type != TOKEN_EOF && peek(runtime)->type != TOKEN_RIGHT_BRACKET && !runtime->failed) {
         skip_lines(runtime);
+        int member_private, member_static;
+        if (!parse_member_modifiers(runtime, &member_private, &member_static)) break;
         if (match(runtime, TOKEN_LET)) {
             Token *field_name = peek(runtime);
             if (!match(runtime, TOKEN_IDENTIFIER)) { error_at(runtime, "expected field name"); break; }
             Value initial = null_value();
             if (match(runtime, TOKEN_EQUAL)) initial = expression(runtime);
-            Field *field = calloc(1, sizeof(*field)); field->name = duplicate_text(field_name->lexeme); field->value = initial;
-            field->next = class_info->fields; class_info->fields = field;
-        } else if (match(runtime, TOKEN_PRIVATE) || match(runtime, TOKEN_FUNC)) {
-            int is_private = runtime->tokens->items[runtime->current - 1].type == TOKEN_PRIVATE;
-            if (is_private && !match(runtime, TOKEN_FUNC)) { error_at(runtime, "private must be followed by func"); break; }
+            Field *field = calloc(1, sizeof(*field));
+            field->name = duplicate_text(field_name->lexeme); field->value = initial;
+            field->owner = class_info; field->is_private = member_private; field->is_static = member_static;
+            Field **fields = member_static ? &class_info->static_fields : &class_info->fields;
+            field->next = *fields; *fields = field;
+        } else if (match(runtime, TOKEN_FUNC)) {
             Token *method_name = peek(runtime);
             if (!match(runtime, TOKEN_IDENTIFIER) || !match(runtime, TOKEN_LEFT_ANGLE)) { error_at(runtime, "expected method name and parameters"); break; }
             Function *method = parse_function_body(runtime, method_name->lexeme, class_info);
-            method->is_private = is_private;
+            method->is_private = member_private; method->is_static = member_static;
+            if (member_static && strcmp(method_name->lexeme, "init") == 0) syntax_error_at(runtime, "init cannot be static");
             method->next = class_info->methods; class_info->methods = method;
-        } else advance(runtime);
+        } else {
+            if (member_private || member_static) syntax_error_at(runtime, "member modifiers must precede let or func");
+            else advance(runtime);
+        }
         skip_lines(runtime);
     }
     match(runtime, TOKEN_RIGHT_BRACKET);
@@ -840,8 +1210,11 @@ static Value call_user_function(Runtime *runtime, Function *function, Value *arg
     for (size_t i = 0; i < count; i++) set_variable(runtime, function->parameters[i], arguments[i], 0);
     runtime->current = function->body_start - 1;
     runtime->tokens = function->token_source; runtime->active_class = function->owner;
+    runtime->this_instance = function->is_static || !function->owner ? NULL : saved_this;
     execute_block(runtime);
     Value result = copy_value(runtime->return_value);
+    if (!runtime->failed && !return_type_matches(function->return_type, result))
+        error_at(runtime, "function result does not match its declared return type");
     while (runtime->variables) { Variable *next = runtime->variables->next; free(runtime->variables->name); free_value(&runtime->variables->value); free(runtime->variables); runtime->variables = next; }
     free_value(&runtime->return_value);
     runtime->return_value = saved_return_value; runtime->return_signal = saved_return_signal;
@@ -971,12 +1344,15 @@ static void execute_for(Runtime *runtime) {
 }
 static void execute_statement(Runtime *runtime) {
     skip_lines(runtime);
-    if (runtime->importing_module && peek(runtime)->type != TOKEN_FUNC && peek(runtime)->type != TOKEN_CLASS && peek(runtime)->type != TOKEN_PRIVATE && peek(runtime)->type != TOKEN_IMPORT) {
+    if (runtime->importing_module && peek(runtime)->type != TOKEN_FUNC && peek(runtime)->type != TOKEN_CLASS && peek(runtime)->type != TOKEN_PRIVATE && peek(runtime)->type != TOKEN_PUBLIC && peek(runtime)->type != TOKEN_IMPORT) {
         skip_import_only_statement(runtime); return;
     }
     if (match(runtime, TOKEN_IMPORT)) { execute_import(runtime); return; }
-    if (match(runtime, TOKEN_CLASS)) { declare_class(runtime); return; }
-    if (match(runtime, TOKEN_FUNC)) { declare_function(runtime); return; }
+    int is_private = match(runtime, TOKEN_PRIVATE);
+    if (!is_private) match(runtime, TOKEN_PUBLIC);
+    if (match(runtime, TOKEN_CLASS)) { declare_class(runtime, is_private); return; }
+    if (match(runtime, TOKEN_FUNC)) { declare_function(runtime, is_private); return; }
+    if (is_private) { syntax_error_at(runtime, "private must precede func or class"); return; }
     int is_const = match(runtime, TOKEN_CONST);
     if (is_const || match(runtime, TOKEN_LET)) {
         Token *name = peek(runtime);
@@ -1006,9 +1382,12 @@ static int program_has_main(TokenList *tokens) {
     int block_depth = 0;
     for (size_t i = 0; i + 1 < tokens->count; i++) {
         TokenType type = tokens->items[i].type;
-        if (block_depth == 0 && type == TOKEN_FUNC &&
-            tokens->items[i + 1].type == TOKEN_IDENTIFIER &&
-            strcmp(tokens->items[i + 1].lexeme, "main") == 0) return 1;
+        size_t declaration = i;
+        if (block_depth == 0 && (type == TOKEN_PUBLIC || type == TOKEN_PRIVATE)) declaration++;
+        if (block_depth == 0 && declaration + 1 < tokens->count &&
+            tokens->items[declaration].type == TOKEN_FUNC &&
+            tokens->items[declaration + 1].type == TOKEN_IDENTIFIER &&
+            strcmp(tokens->items[declaration + 1].lexeme, "main") == 0) return 1;
         if (type == TOKEN_LEFT_BRACKET) block_depth++;
         else if (type == TOKEN_RIGHT_BRACKET && block_depth > 0) block_depth--;
     }
@@ -1019,7 +1398,8 @@ static void execute_program(Runtime *runtime) {
     while (peek(runtime)->type != TOKEN_EOF && !runtime->failed) {
         if (runtime->has_main && !runtime->importing_module &&
             peek(runtime)->type != TOKEN_IMPORT && peek(runtime)->type != TOKEN_CLASS &&
-            peek(runtime)->type != TOKEN_FUNC) {
+            peek(runtime)->type != TOKEN_FUNC && peek(runtime)->type != TOKEN_PRIVATE &&
+            peek(runtime)->type != TOKEN_PUBLIC) {
             skip_import_only_statement(runtime);
         } else execute_statement(runtime);
         skip_lines(runtime);

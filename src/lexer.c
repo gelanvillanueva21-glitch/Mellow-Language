@@ -44,6 +44,7 @@ static TokenType keyword_type(const char *text) {
         {"return", TOKEN_RETURN}, {"func", TOKEN_FUNC}, {"class", TOKEN_CLASS},
         {"public", TOKEN_PUBLIC}, {"private", TOKEN_PRIVATE}, {"import", TOKEN_IMPORT},
         {"try", TOKEN_TRY}, {"catch", TOKEN_CATCH}, {"raise", TOKEN_RAISE},
+        {"static", TOKEN_STATIC},
         {"fn", TOKEN_FN}, {"and", TOKEN_AND}, {"or", TOKEN_OR}, {"not", TOKEN_NOT},
         {"this", TOKEN_THIS}, {"super", TOKEN_SUPER}
     };
@@ -90,6 +91,10 @@ TokenList lexer_scan(const char *source) {
             continue;
         }
         int line = scanner.line, column = scanner.column;
+        if (c == '-' && scanner.current[1] == '>') {
+            push_token(&tokens, TOKEN_ARROW, scanner.current, 2, line, column);
+            scanner.current += 2; scanner.column += 2; continue;
+        }
         if (isalpha((unsigned char)c) || c == '_') {
             const char *start = scanner.current;
             while (isalnum((unsigned char)*scanner.current) || *scanner.current == '_') { scanner.current++; scanner.column++; }
@@ -127,8 +132,8 @@ void token_list_free(TokenList *tokens) {
 }
 
 const char *token_type_name(TokenType type) {
-    static const char *names[] = {"end of file", "error", "identifier", "number", "string", "char", "true", "false", "null", "let", "const", "if", "else", "while", "for", "in", "loop", "break", "continue", "return", "func", "class", "public", "private", "import", "try", "catch", "raise", "fn", "and", "or", "not", "this", "super", "newline", "(", ")", "<", ">", "[", "]", "{", "}", ",", ":", ".", "=", "|>", ";"};
-    return type <= TOKEN_SEMICOLON ? names[type] : "unknown";
+    static const char *names[] = {"end of file", "error", "identifier", "number", "string", "char", "true", "false", "null", "let", "const", "if", "else", "while", "for", "in", "loop", "break", "continue", "return", "func", "class", "public", "private", "import", "try", "catch", "raise", "fn", "and", "or", "not", "this", "super", "newline", "(", ")", "<", ">", "[", "]", "{", "}", ",", ":", ".", "=", "|>", ";", "->", "static"};
+    return type <= TOKEN_STATIC ? names[type] : "unknown";
 }
 
 #include "lexer.h"

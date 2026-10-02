@@ -52,7 +52,9 @@ typedef enum {
     TOKEN_DOT,
     TOKEN_EQUAL,
     TOKEN_PIPE,
-    TOKEN_SEMICOLON
+    TOKEN_SEMICOLON,
+    TOKEN_ARROW,
+    TOKEN_STATIC
 } TokenType;
 
 typedef struct {

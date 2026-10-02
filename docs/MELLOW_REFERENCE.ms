@@ -23,12 +23,12 @@ Function calls:
 .DS
 print<"Hello, Mellow!">
 add<2, 3>
-print<add<2, mul<3, 4>>>
+print<add<2, multiply<3, 4>>>
 .DE
 .PP
 Blocks:
 .DS
-if gt<score, 10> [
+if greater_than<score, 10> [
     print<"high score">
 ]
 .DE
@@ -100,7 +100,7 @@ Declares an immutable variable using .B const name or .B const name = expression
 Executes a block when an expression is truthy. Truthy values are true,
 nonzero numbers, nonempty strings, and nonempty collections.
 .DS
-if eq<name, "Mellow"> [
+if equal<name, "Mellow"> [
     print<"matched">
 ]
 .DE
@@ -112,7 +112,7 @@ supported.
 .B while
 Repeats a block while its condition is truthy.
 .DS
-while gt<count, 0> [
+while greater_than<count, 0> [
     print<count>
     set<count, dec<count>>
 ]
@@ -134,7 +134,7 @@ Returns a value from a named function. With no expression it returns null.
 Defines a named function with parameters and a square-bracket body.
 .DS
 func square<x> [
-    return mul<x, x>
+    return multiply<x, x>
 ]
 print<square<5>>
 .DE
@@ -151,19 +151,19 @@ Arithmetic operators such as +, -, *, /, and % do not exist in Mellow.
 Returns the numeric sum. It also concatenates two strings or two collections of
 the same kind.
 .TP
-.B sub<a, b>
+.B subtract<a, b>
 Returns a minus b for numbers.
 .TP
-.B mul<a, b>
+.B multiply<a, b>
 Returns a times b for numbers.
 .TP
-.B div<a, b>
+.B divide<a, b>
 Returns a divided by b. Division by zero is a runtime error.
 .TP
-.B mod<a, b>
+.B modulo<a, b>
 Returns the floating-point remainder of a divided by b.
 .TP
-.B pow<a, b>
+.B power<a, b>
 Returns a raised to the power b.
 .TP
 .B sqrt<a>
@@ -174,47 +174,39 @@ Returns a plus one.
 .TP
 .B dec<a>
 Returns a minus one.
+.PP
+The retired names \fBsub\fP, \fBmul\fP, \fBdiv\fP, \fBmod\fP, and
+\fBpow\fP raise a \fBValueErr\fP and recommend \fBsubtract\fP,
+\fBmultiply\fP, \fBdivide\fP, \fBmodulo\fP, and \fBpower\fP, respectively.
+The retired names \fBsum\fP, \fBaddition\fP, \fBminus\fP, \fBtimes\fP,
+\fBquotient\fP, and \fBremainder\fP also raise a \fBValueErr\fP.
 .NH 1
 6. Comparison and Logic Builtins
 .PP
 Comparison operators such as ==, !=, <, >, <=, and >= do not exist as
 operators. The following functions return booleans.
 .TP
-.B eq<a, b>
+.B equal<a, b>
 True when the values are equal, including recursive collection equality.
 .TP
-.B neq<a, b>
+.B not_equal<a, b>
 True when the values are not equal.
 .TP
-.B lt<a, b>
+.B less_than<a, b>
 True when numeric a is less than numeric b.
 .TP
-.B gt<a, b>
+.B greater_than<a, b>
 True when numeric a is greater than numeric b.
 .TP
-.B lte<a, b>
+.B less_equal<a, b>
 True when numeric a is less than or equal to numeric b.
 .TP
-.B gte<a, b>
-True when numeric a is greater than or equal to numeric b.
-.TP
-.B equal<a, b>
-Readable alias for .B eq<a, b>.
-.TP
-.B not_equal<a, b>
-Readable alias for .B neq<a, b>.
-.TP
-.B less<a, b>
-Readable alias for .B lt<a, b>.
-.TP
-.B greater<a, b>
-Readable alias for .B gt<a, b>.
-.TP
-.B less_equal<a, b>
-Readable alias for .B lte<a, b>.
-.TP
 .B greater_equal<a, b>
-Readable alias for .B gte<a, b>.
+True when numeric a is greater than or equal to numeric b.
+.PP
+The retired names \fBeq\fP, \fBneq\fP, \fBlt\fP, \fBgt\fP, \fBlte\fP,
+\fBgte\fP, \fBless\fP, and \fBgreater\fP raise a \fBValueErr\fP and
+recommend their corresponding canonical comparison names.
 .TP
 .B and<a, b>
 Returns the boolean conjunction of a and b.
@@ -358,13 +350,18 @@ Named functions support parameters, local variables, return values, and
 recursion. Arguments are evaluated before the function is called.
 .DS
 func factorial<n> [
-    if lte<n, 1> [
+    if less_equal<n, 1> [
         return 1
     ]
-    return mul<n, factorial<dec<n>>>
+    return multiply<n, factorial<dec<n>>>
 ]
 print<factorial<5>>
 .DE
+.PP
+Functions and methods may declare a runtime-checked return type after their
+parameter list: \fB-> String\fP, \fB-> Number\fP, \fB-> Boolean\fP, or
+\fB-> Nothing\fP. .B Number accepts integral and fractional numbers. .B Nothing
+requires a null result. Without an annotation, return values remain dynamic.
 .NH 1
 10. Object-Oriented Programming
 .PP
@@ -390,8 +387,10 @@ dynamic method lookup, overriding, and parent calls through .B super.method<>
 are supported. .B destroy<instance> calls an optional .B free<> method before
 releasing the instance.
 .PP
-Visibility modifiers, static members, and automatic garbage collection are
-reserved for later runtime layers.
+Visibility defaults to .B public. .B private fields and methods are restricted
+to their declaring class; private top-level functions and classes are limited
+to their source file. .B static fields and methods are accessed through the
+class name, for example .B Counter.total and .B Counter.next<>.
 .NH 1
 11. Command-Line Tools
 .TP
@@ -416,6 +415,6 @@ top-to-bottom.
 .NH 1
 13. Current Limitations
 .PP
-Indexing syntax, default parameters, lambdas, closures, static members, and
-automatic garbage collection are not yet implemented.
+Indexing syntax, default parameters, lambdas, closures, and automatic garbage
+collection are not yet implemented.
 .bp

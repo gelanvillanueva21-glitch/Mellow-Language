@@ -9,7 +9,6 @@ char *read_file(char *filename) {
 
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
-        printf("Could not open file.\n");
         return NULL;
     }
     

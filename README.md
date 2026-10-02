@@ -22,21 +22,22 @@ make
 The lexer supports identifiers, numbers, strings, chars, keywords, comments,
 newlines, call delimiters, block delimiters, collection punctuation, and
 assignment. The runtime supports dynamic values, optionally initialized
-variables and fields, named functions, classes, arrays, lists, dictionaries,
-loops, imports, typed `try`/`catch`, and automatic `main<>` execution. Calls use
-angle brackets, blocks use square brackets, and arithmetic/comparison use named
+variables and fields, named functions, classes with static members and
+visibility, checked return annotations, arrays, lists, dictionaries, loops,
+imports, typed `try`/`catch`, and automatic `main<>` execution. Calls use angle
+brackets, blocks use square brackets, and arithmetic/comparison use named
 builtins. `--tokens` remains available as a development diagnostic mode, and
 `--repl` starts an interactive session.
 
 Current limitations include indexing syntax, default parameters, anonymous
-functions, closures, static members, and automatic garbage collection. See
+functions, closures, and automatic garbage collection. See
 [SPEC.md](SPEC.md) for the implemented grammar and semantics.
 
 ## Design decisions
 
-Mellow uses dynamic runtime values with optional type annotations planned for a
-later static-checking pass. This keeps closures, modules, and dynamic dispatch
-straightforward in the first interpreter.
+Mellow uses dynamic runtime values. Optional function return annotations are
+checked when a function or method returns; they do not make variable bindings
+statically typed.
 
 Arrays use `{1, 2, 3}`, lists use `list<1, 2, 3>`, and non-empty dictionaries
 use string-keyed colon pairs such as `{"name": "Alice"}`. Empty `{}` is an

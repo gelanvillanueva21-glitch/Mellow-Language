@@ -15,6 +15,9 @@ tokens: mellow
 
 test: mellow
 	./mellow test/main.mll
+	./mellow test/feature_entrypoint.mll
+	./mellow test/stdlib_features.mll
+	sh scripts/check_deprecated_builtins.sh ./mellow
 
 clean:
 	rm -f mellow

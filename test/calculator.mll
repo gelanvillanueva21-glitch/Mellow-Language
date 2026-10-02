@@ -12,49 +12,49 @@ class Calculator [
         set<this.secondNumber, secondNumber>
     ]
 
-    func getSum<> [
+    func getSum<> -> Number [
         return add<this.firstNumber, this.secondNumber>
     ]
 
-    func getDifference<> [
-        return sub<this.firstNumber, this.secondNumber>
+    func getDifference<> -> Number [
+        return subtract<this.firstNumber, this.secondNumber>
     ]
 
-    func getProduct<> [
-        return mul<this.firstNumber, this.secondNumber>
+    func getProduct<> -> Number [
+        return multiply<this.firstNumber, this.secondNumber>
     ]
 
-    func getQuotient<> [
-        if eq<this.secondNumber, 0> [
+    func getQuotient<> -> Number [
+        if equal<this.secondNumber, 0> [
             return 0
         ]
-        return div<this.firstNumber, this.secondNumber>
+        return divide<this.firstNumber, this.secondNumber>
     ]
 
-    func getModulos<> [
-        return mod<this.firstNumber, this.secondNumber>
+    func getModulos<> -> Number [
+        return modulo<this.firstNumber, this.secondNumber>
     ]
 
 ]
 
 
-func checkOperator<operator, calculator> [
-    if eq<operator, "+"> [
+func checkOperator<operator, calculator> -> Nothing [
+    if equal<operator, "+"> [
         let result = calculator.getSum<>
         print<"Sum: {result}">
     ] 
     
-    else if eq<operator, "-"> [
+    else if equal<operator, "-"> [
         let result = calculator.getDifference<>
         print<"Difference: {result}">
     ] 
     
-    else if eq<operator, "*"> [
+    else if equal<operator, "*"> [
         let result = calculator.getProduct<>
         print<"Product: {result}">
     ] 
     
-    else if eq<operator, "/"> [
+    else if equal<operator, "/"> [
         let result = calculator.getQuotient<>
         print<"Quotient: {result}">
     ] 
@@ -66,7 +66,7 @@ func checkOperator<operator, calculator> [
 ]
 
 
-func main<> [
+func main<> -> Nothing [
     try [
         let firstNumber = to_number<input<"Enter First number: ">>
         let secondNumber = to_number<input<"Enter Second Number: ">>

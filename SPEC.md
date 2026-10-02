@@ -10,7 +10,8 @@ program       = { statement } ;
 statement     = declaration | control | class_decl | import_stmt
               | expression [ ";" ] ;
 declaration   = ( "let" | "const" ) identifier [ "=" expression ]
-              | "func" identifier "<" [ parameters ] ">" block ;
+                            | [ visibility ] "func" identifier "<" [ parameters ] ">"
+                                [ "->" return_type ] block ;
 parameters    = identifier { "," identifier } ;
 block         = "[" { statement } "]" ;
 control       = "if" expression block [ "else" ( "if" expression block | block ) ]
@@ -20,10 +21,13 @@ control       = "if" expression block [ "else" ( "if" expression block | block )
               | "try" block catch_clause { catch_clause }
               | "break" | "continue"
               | "return" [ expression ] ;
-class_decl    = "class" identifier [ ":" identifier ] "["
+class_decl    = [ visibility ] "class" identifier [ ":" identifier ] "["
                 { field_decl | method_decl } "]" ;
-field_decl    = "let" identifier [ "=" expression ] ;
-method_decl   = [ "private" ] "func" identifier "<" [ parameters ] ">" block ;
+field_decl    = [ visibility ] [ "static" ] "let" identifier [ "=" expression ] ;
+method_decl   = [ visibility ] [ "static" ] "func" identifier
+                "<" [ parameters ] ">" [ "->" return_type ] block ;
+visibility    = "public" | "private" ;
+return_type   = "String" | "Number" | "Boolean" | "Nothing" ;
 import_stmt   = "import" string "<" [ identifier { "," identifier } ] ">" ;
 catch_spec    = identifier [ ":" error_type ] | error_type ;
 catch_clause  = "catch" "<" [ catch_spec ] ">" block ;
@@ -52,18 +56,31 @@ initializer but cannot be reassigned. `set<name, value>` assigns a new value to
 a mutable variable. Class fields follow the same `let` rules. Named functions
 support recursion.
 
+`public` is the default visibility. `private` top-level functions and classes
+are limited to their source file; private class fields and methods are
+accessible only from methods of their declaring class. `static` class fields
+and methods are accessed through the class name, for example
+`Counter.total` and `Counter.next<>`.
+
+Functions and methods may declare `-> String`, `-> Number`, `-> Boolean`, or
+`-> Nothing` after their parameter list. These are runtime-checked return
+contracts. `Number` accepts integral and fractional numeric values; `Nothing`
+accepts `null`, including a function with no explicit return. Omitted return
+annotations preserve dynamic behavior.
+
 Arrays use `{1, 2, 3}` and lists use `list<1, 2, 3>`. A non-empty dictionary
 literal uses string keys and colons, for example `{"name": "Ada"}`. Empty
 braces `{}` mean an empty array; use `dict<>` for an empty dictionary.
 
 ## Builtins
 
-Readable comparison aliases are also supported: `equal`, `not_equal`, `less`,
-`greater`, `less_equal`, and `greater_equal`.
-
-`print` writes values. `add`, `sub`, `mul`, `div`, `mod`, `pow`, `sqrt`, `inc`,
-and `dec` operate on numbers; `add` also concatenates strings and same-kind
-collections. `eq`, `neq`, `lt`, `gt`, `lte`, and `gte` return booleans.
+`print` writes values. `add`, `subtract`, `multiply`, `divide`, `modulo`,
+`power`, `sqrt`, `inc`, and `dec` provide arithmetic; `add` also concatenates
+strings and same-kind collections. `equal`, `not_equal`, `less_than`,
+`greater_than`, `less_equal`, and `greater_equal` return booleans. The retired
+names `sub`, `mul`, `div`, `mod`, `pow`, `eq`, `neq`, `lt`, `gt`, `lte`, `gte`,
+`less`, `greater`, `sum`, `addition`, `minus`, `times`, `quotient`, and
+`remainder` raise a `ValueErr` that recommends the canonical name.
 `and`, `or`, and `not` combine booleans. `abs`, `min`, `max`, `clamp`, `floor`,
 `ceil`, and `round` provide common numeric helpers. `is_null`, `is_number`,
 `is_string`, `is_array`, `is_list`, and `is_dict` return type predicates. `len`,
@@ -128,8 +145,8 @@ let name = "Mellow"
 print<"{greeting}, {name}!">
 
 func factorial<n> [
-    if lte<n, 1> [ return 1 ]
-    return mul<n, factorial<dec<n>>>
+    if less_equal<n, 1> [ return 1 ]
+    return multiply<n, factorial<dec<n>>>
 ]
 
 print<factorial<5>>
@@ -153,6 +170,21 @@ Use `catch<>` for an unbound catch-all, `catch<DivisionErr>` to handle only a
 particular error type, or `catch<error: DivisionErr>` to filter and bind the
 message. Available types are `ValueErr`, `RecurErr`, `DivisionErr`, and
 `SyntaxErr`.
+
+## Functions and class members
+
+```mellow
+public func ratio<numerator, denominator> -> Number [
+    return divide<numerator, denominator>
+]
+
+class Counter [
+    private let value = 0
+    static let created = 0
+    private func current<> -> Number [ return this.value ]
+    public static func next<> -> Number [ return inc<Counter.created> ]
+]
+```
 
 String helpers include `trim`, `upper`, `lower`, `replace`, `starts_with`,
 `ends_with`, `split`, and `join`:
@@ -193,5 +225,5 @@ from top to bottom.
 
 ## Current limitations
 
-Indexing syntax, default parameters, anonymous functions, closures, static
-members, and automatic garbage collection are not yet implemented.
+Indexing syntax, default parameters, anonymous functions, closures, and
+automatic garbage collection are not yet implemented.
